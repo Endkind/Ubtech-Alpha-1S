@@ -1,160 +1,99 @@
 <script setup lang="ts">
-import { ref } from "vue";
-import { invoke } from "@tauri-apps/api/core";
+  import { PAGES } from "@ts/pages.ts";
+  import { computed, onMounted, ref, shallowRef } from "vue";
+  import { getVersion } from "@tauri-apps/api/app";
+  import { openUrl } from "@tauri-apps/plugin-opener";
+  import pkg from "../package.json";
+  import About from "@pages/About.vue";
+  import Settings from "@pages/Settings.vue";
+  import Home from "@pages/Home.vue";
 
-const greetMsg = ref("");
-const name = ref("");
+  type Page = typeof PAGES[keyof typeof PAGES];
 
-async function greet() {
-  // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-  greetMsg.value = await invoke("greet", { name: name.value });
-}
+  const current_page = shallowRef<Page>(PAGES.HOME);
+
+  function set_page(page: Page) {
+    current_page.value = page;
+  }
+
+  const version = ref(pkg.version || "0.1.0");
+  const releaseTag = computed(() => `v${version.value.replace(/^v/, "")}`);
+  const releaseUrl = computed(
+    () => `https://github.com/Endkind/Ubtech-Alpha-1S/releases/tag/${releaseTag.value}`
+  );
+
+  onMounted(async () => {
+    try {
+      version.value = await getVersion();
+    } catch (error) {
+      console.error("Fehler beim Abrufen der Tauri-Version:", error);
+      version.value = pkg.version;
+    }
+  });
+
+  async function openRelease() {
+    try {
+      await openUrl(releaseUrl.value);
+    } catch {
+      window.open(releaseUrl.value, "_blank");
+    }
+  }
 </script>
 
 <template>
-  <main class="container">
-    <h1>Welcome to Tauri + Vue</h1>
-
-    <div class="row">
-      <a href="https://vite.dev" target="_blank">
-        <img src="/vite.svg" class="logo vite" alt="Vite logo" />
-      </a>
-      <a href="https://tauri.app" target="_blank">
-        <img src="/tauri.svg" class="logo tauri" alt="Tauri logo" />
-      </a>
-      <a href="https://vuejs.org/" target="_blank">
-        <img src="./assets/vue.svg" class="logo vue" alt="Vue logo" />
-      </a>
+  <div class="drawer lg:drawer-open">
+    <input id="drawer" type="checkbox" class="drawer-toggle inline" />
+    <div class="drawer-content">
+      <!-- Navbar -->
+      <nav class="navbar w-full bg-base-300">
+        <label for="drawer" aria-label="open sidebar" class="btn btn-square btn-ghost drawer-button">
+          <!-- Sidebar toggle icon -->
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" stroke-linejoin="round" stroke-linecap="round" stroke-width="2" fill="none" stroke="currentColor" class="my-1.5 inline-block size-4"><path d="M4 4m0 2a2 2 0 0 1 2 -2h12a2 2 0 0 1 2 2v12a2 2 0 0 1 -2 2h-12a2 2 0 0 1 -2 -2z"></path><path d="M9 4v16"></path><path d="M14 10l2 2l-2 2"></path></svg>
+        </label>
+        <div class="px-4">{{ current_page.display_name }}</div>
+      </nav>
+      <!-- Page content here -->
+      <Home v-if="current_page == PAGES.HOME" />
+      <About v-else-if="current_page == PAGES.ABOUT" />
+      <Settings v-else-if="current_page == PAGES.SETTINGS" />
     </div>
-    <p>Click on the Tauri, Vite, and Vue logos to learn more.</p>
 
-    <form class="row" @submit.prevent="greet">
-      <input id="greet-input" v-model="name" placeholder="Enter a name..." />
-      <button type="submit">Greet</button>
-    </form>
-    <p>{{ greetMsg }}</p>
-  </main>
+    <div class="drawer-side is-drawer-close:overflow-visible">
+      <label for="drawer" aria-label="close sidebar" class="drawer-overlay"></label>
+      <div class="flex min-h-full flex-col items-start bg-base-200 is-drawer-close:w-16 is-drawer-open:w-64">
+        <!-- Sidebar content here -->
+        <ul class="menu w-full grow">
+          <li v-for="page in PAGES" :key="page.display_name">
+            <button
+                class="is-drawer-close:tooltip is-drawer-close:tooltip-right"
+                :data-tip="page.display_name"
+                @click="set_page(page)"
+            >
+              <component
+                :is="page.hero_icon"
+                class="my-1.5 inline-block size-6"
+              />
+              <span class="is-drawer-close:hidden">{{ page.display_name }}</span>
+            </button>
+          </li>
+        </ul>
+        <div
+          class="w-full p-3 text-center is-drawer-close:tooltip is-drawer-close:tooltip-right"
+          :data-tip="releaseTag"
+        >
+          <a
+            :href="releaseUrl"
+            class="text-xs font-mono text-base-content/60 hover:text-primary transition-colors block truncate cursor-pointer py-1"
+            @click.prevent="openRelease"
+          >
+            {{ releaseTag }}
+          </a>
+        </div>
+      </div>
+    </div>
+  </div>
 </template>
 
 <style scoped>
-.logo.vite:hover {
-  filter: drop-shadow(0 0 2em #747bff);
-}
-
-.logo.vue:hover {
-  filter: drop-shadow(0 0 2em #249b73);
-}
-
-</style>
-<style>
-:root {
-  font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
-  font-size: 16px;
-  line-height: 24px;
-  font-weight: 400;
-
-  color: #0f0f0f;
-  background-color: #f6f6f6;
-
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  -webkit-text-size-adjust: 100%;
-}
-
-.container {
-  margin: 0;
-  padding-top: 10vh;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  text-align: center;
-}
-
-.logo {
-  height: 6em;
-  padding: 1.5em;
-  will-change: filter;
-  transition: 0.75s;
-}
-
-.logo.tauri:hover {
-  filter: drop-shadow(0 0 2em #24c8db);
-}
-
-.row {
-  display: flex;
-  justify-content: center;
-}
-
-a {
-  font-weight: 500;
-  color: #646cff;
-  text-decoration: inherit;
-}
-
-a:hover {
-  color: #535bf2;
-}
-
-h1 {
-  text-align: center;
-}
-
-input,
-button {
-  border-radius: 8px;
-  border: 1px solid transparent;
-  padding: 0.6em 1.2em;
-  font-size: 1em;
-  font-weight: 500;
-  font-family: inherit;
-  color: #0f0f0f;
-  background-color: #ffffff;
-  transition: border-color 0.25s;
-  box-shadow: 0 2px 2px rgba(0, 0, 0, 0.2);
-}
-
-button {
-  cursor: pointer;
-}
-
-button:hover {
-  border-color: #396cd8;
-}
-button:active {
-  border-color: #396cd8;
-  background-color: #e8e8e8;
-}
-
-input,
-button {
-  outline: none;
-}
-
-#greet-input {
-  margin-right: 5px;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    color: #f6f6f6;
-    background-color: #2f2f2f;
-  }
-
-  a:hover {
-    color: #24c8db;
-  }
-
-  input,
-  button {
-    color: #ffffff;
-    background-color: #0f0f0f98;
-  }
-  button:active {
-    background-color: #0f0f0f69;
-  }
-}
 
 </style>
