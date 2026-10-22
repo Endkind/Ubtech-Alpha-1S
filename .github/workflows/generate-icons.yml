@@ -47,5 +47,5 @@ jobs:
             exit 0
           fi
 
-          got commit -m "chore: regenerate Tauri icons"
+          git commit -m "chore: regenerate Tauri icons"
           git push
