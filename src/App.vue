@@ -41,9 +41,9 @@
 </script>
 
 <template>
-  <div class="drawer lg:drawer-open">
+  <div class="drawer lg:drawer-open min-h-screen h-screen">
     <input id="drawer" type="checkbox" class="drawer-toggle inline" />
-    <div class="drawer-content">
+    <div class="drawer-content flex flex-col h-full overflow-hidden">
       <!-- Navbar -->
       <nav class="navbar w-full bg-base-300">
         <label for="drawer" aria-label="open sidebar" class="btn btn-square btn-ghost drawer-button">
@@ -53,9 +53,13 @@
         <div class="px-4">{{ current_page.display_name }}</div>
       </nav>
       <!-- Page content here -->
-      <Home v-if="current_page == PAGES.HOME" />
-      <About v-else-if="current_page == PAGES.ABOUT" />
-      <Settings v-else-if="current_page == PAGES.SETTINGS" />
+      <div class="flex flex-1 min-h-0 overflow-auto">
+        <div class="grow p-2">
+          <Home v-if="current_page == PAGES.HOME" />
+          <About v-else-if="current_page == PAGES.ABOUT" />
+          <Settings v-else-if="current_page == PAGES.SETTINGS" />
+        </div>
+      </div>
     </div>
 
     <div class="drawer-side is-drawer-close:overflow-visible">
