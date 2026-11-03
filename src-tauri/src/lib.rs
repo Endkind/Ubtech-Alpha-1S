@@ -1,8 +1,12 @@
 pub mod settings;
 pub mod validator;
+pub mod dialog;
+pub mod platform;
 mod app_state;
 
 use settings::{get_settings, save_settings};
+use dialog::{pick_file, pick_directory};
+use platform::get_family;
 use crate::app_state::AppState;
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
@@ -16,7 +20,14 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .manage(AppState::default())
-        .invoke_handler(tauri::generate_handler![greet, get_settings, save_settings])
+        .invoke_handler(tauri::generate_handler![
+            greet,
+            get_settings,
+            save_settings,
+            pick_file,
+            pick_directory,
+            get_family
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
