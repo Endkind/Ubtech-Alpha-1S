@@ -1,5 +1,11 @@
 import { Component } from "vue";
-import {AdjustmentsHorizontalIcon, HomeIcon, QuestionMarkCircleIcon} from "@heroicons/vue/24/outline";
+import {
+    AdjustmentsHorizontalIcon,
+    HomeIcon,
+    QuestionMarkCircleIcon,
+    PencilIcon,
+    FolderIcon
+} from "@heroicons/vue/24/outline";
 
 export type PageInfo = {
     display_name: string;
@@ -10,6 +16,14 @@ export const PAGES = {
     HOME: {
         display_name: "Home",
         hero_icon: HomeIcon
+    },
+    EDITOR: {
+        display_name: "Editor",
+        hero_icon: PencilIcon
+    },
+    LIBRARY: {
+        display_name: "Library",
+        hero_icon: FolderIcon
     },
     SETTINGS: {
         display_name: "Settings",

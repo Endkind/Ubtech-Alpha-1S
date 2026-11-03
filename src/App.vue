@@ -7,6 +7,8 @@
   import About from "@pages/About.vue";
   import Settings from "@pages/Settings.vue";
   import Home from "@pages/Home.vue";
+  import Editor from "@pages/Editor.vue";
+  import Library from "@pages/Library.vue";
   import { usePagesStore } from "@stores/pages.ts";
 
   const pages_store = usePagesStore();
@@ -51,8 +53,10 @@
       <div class="flex flex-1 min-h-0 overflow-auto">
         <div class="grow p-2">
           <Home v-if="pages_store.current_page == PAGES.HOME" v-bind="pages_store.kargs" />
-          <About v-else-if="pages_store.current_page == PAGES.ABOUT" v-bind="pages_store.kargs" />
+          <Editor v-else-if="pages_store.current_page == PAGES.EDITOR" v-bind="pages_store.kargs" />
+          <Library v-else-if="pages_store.current_page == PAGES.LIBRARY" v-bind="pages_store.kargs" />
           <Settings v-else-if="pages_store.current_page == PAGES.SETTINGS" v-bind="pages_store.kargs" />
+          <About v-else-if="pages_store.current_page == PAGES.ABOUT" v-bind="pages_store.kargs" />
         </div>
       </div>
     </div>
