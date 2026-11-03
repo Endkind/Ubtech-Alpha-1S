@@ -18,6 +18,7 @@ export default defineConfig(() => ({
             "@components": fileURLToPath(new URL("./src/components", import.meta.url)),
             "@css": fileURLToPath(new URL("./src/css", import.meta.url)),
             "@pages": fileURLToPath(new URL("./src/pages", import.meta.url)),
+            "@stores": fileURLToPath(new URL("./src/ts/stores", import.meta.url)),
             "@ts": fileURLToPath(new URL("./src/ts", import.meta.url)),
         },
     },

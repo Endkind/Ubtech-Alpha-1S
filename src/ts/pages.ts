@@ -1,7 +1,7 @@
 import { Component } from "vue";
 import {AdjustmentsHorizontalIcon, HomeIcon, QuestionMarkCircleIcon} from "@heroicons/vue/24/outline";
 
-type Page = {
+export type PageInfo = {
     display_name: string;
     hero_icon: Component;
 };
@@ -19,4 +19,6 @@ export const PAGES = {
         display_name: "About",
         hero_icon: QuestionMarkCircleIcon
     },
-} as const satisfies Record<string, Page>;
+} as const satisfies Record<string, PageInfo>;
+
+export type Page = typeof PAGES[keyof typeof PAGES];

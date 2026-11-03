@@ -1,20 +1,15 @@
 <script setup lang="ts">
   import { PAGES } from "@ts/pages.ts";
-  import { computed, onMounted, ref, shallowRef } from "vue";
+  import { computed, onMounted, ref } from "vue";
   import { getVersion } from "@tauri-apps/api/app";
   import { openUrl } from "@tauri-apps/plugin-opener";
   import pkg from "../package.json";
   import About from "@pages/About.vue";
   import Settings from "@pages/Settings.vue";
   import Home from "@pages/Home.vue";
+  import { usePagesStore } from "@stores/pages.ts";
 
-  type Page = typeof PAGES[keyof typeof PAGES];
-
-  const current_page = shallowRef<Page>(PAGES.HOME);
-
-  function set_page(page: Page) {
-    current_page.value = page;
-  }
+  const pages_store = usePagesStore();
 
   const version = ref(pkg.version || "0.1.0");
   const releaseTag = computed(() => `v${version.value.replace(/^v/, "")}`);
@@ -50,14 +45,14 @@
           <!-- Sidebar toggle icon -->
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" stroke-linejoin="round" stroke-linecap="round" stroke-width="2" fill="none" stroke="currentColor" class="my-1.5 inline-block size-4"><path d="M4 4m0 2a2 2 0 0 1 2 -2h12a2 2 0 0 1 2 2v12a2 2 0 0 1 -2 2h-12a2 2 0 0 1 -2 -2z"></path><path d="M9 4v16"></path><path d="M14 10l2 2l-2 2"></path></svg>
         </label>
-        <div class="px-4">{{ current_page.display_name }}</div>
+        <div class="px-4">{{ pages_store.current_page.display_name }}</div>
       </nav>
       <!-- Page content here -->
       <div class="flex flex-1 min-h-0 overflow-auto">
         <div class="grow p-2">
-          <Home v-if="current_page == PAGES.HOME" />
-          <About v-else-if="current_page == PAGES.ABOUT" />
-          <Settings v-else-if="current_page == PAGES.SETTINGS" />
+          <Home v-if="pages_store.current_page == PAGES.HOME" v-bind="pages_store.kargs" />
+          <About v-else-if="pages_store.current_page == PAGES.ABOUT" v-bind="pages_store.kargs" />
+          <Settings v-else-if="pages_store.current_page == PAGES.SETTINGS" v-bind="pages_store.kargs" />
         </div>
       </div>
     </div>
@@ -71,7 +66,7 @@
             <button
                 class="is-drawer-close:tooltip is-drawer-close:tooltip-right"
                 :data-tip="page.display_name"
-                @click="set_page(page)"
+                @click="pages_store.set_page(page)"
             >
               <component
                 :is="page.hero_icon"

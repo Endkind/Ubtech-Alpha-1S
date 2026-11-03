@@ -30,6 +30,8 @@
       "@css/*": ["./src/css/*"],
       "@pages": ["./src/pages"],
       "@pages/*": ["./src/pages/*"],
+      "@stores": ["./src/ts/stores"],
+      "@stores/*": ["./src/ts/stores/*"],
       "@ts": ["./src/ts"],
       "@ts/*": ["./src/ts/*"]
     }
