@@ -70,6 +70,7 @@
             <button
                 class="is-drawer-close:tooltip is-drawer-close:tooltip-right"
                 :data-tip="page.display_name"
+                :aria-label="page.display_name"
                 @click="pages_store.set_page(page)"
             >
               <component
