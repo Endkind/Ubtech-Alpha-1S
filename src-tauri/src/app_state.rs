@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use std::sync::Mutex;
+use tokio::sync::Mutex;
 use crate::settings::config::Config as SettingsConfig;
 
 #[derive(Debug)]

@@ -26,6 +26,7 @@ toml = "0.8"
 validator = { version = "0.21.0", features = ["derive"] }
 regex = "1"
 rfd = "0.15"
+tokio = { version = "1", features = ["fs", "sync", "macros", "rt", "io-util"] }
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

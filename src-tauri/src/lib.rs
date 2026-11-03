@@ -25,9 +25,13 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
-            std::fs::create_dir_all(&config_dir).map_err(|e| e.to_string())?;
             let config_path = config_dir.join("config.toml");
-            let config = Config::load_or_init(&config_path);
+            let config = tauri::async_runtime::block_on(async {
+                tokio::fs::create_dir_all(&config_dir)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                Ok::<_, String>(Config::load_or_init(&config_path).await)
+            })?;
 
             app.manage(AppState::new(config, config_path));
             Ok(())

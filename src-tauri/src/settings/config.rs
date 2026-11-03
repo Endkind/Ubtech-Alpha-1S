@@ -1,7 +1,12 @@
 use std::path::Path;
+use std::process::exit;
+use std::sync::atomic::{AtomicU64, Ordering};
 use serde::{Deserialize, Serialize};
+use tokio::io::AsyncWriteExt;
 use validator::Validate;
 use crate::validator::regex::MAC_ADDRESS as MAC_ADDRESS_REGEX;
+
+static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct UpdateConfig {
@@ -63,55 +68,106 @@ impl Config {
         Ok(())
     }
 
-    pub fn load_from_file<P: AsRef<Path>>(path: P) -> Result<Self, Box<dyn std::error::Error>> {
-        let content = std::fs::read_to_string(path)?;
+    pub async fn load_from_file<P: AsRef<Path>>(path: P) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        let content = tokio::fs::read_to_string(path).await?;
         let config: Config = toml::from_str(&content)?;
         config.validate()?;
         Ok(config)
     }
 
-    pub fn save_to_file<P: AsRef<Path>>(&self, path: P) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn save_to_file<P: AsRef<Path>>(&self, path: P) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         self.validate()?;
         let path = path.as_ref();
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
+        let parent = path
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+
+        tokio::fs::create_dir_all(parent).await?;
+
         let toml_str = toml::to_string_pretty(self)?;
-        std::fs::write(path, toml_str)?;
+
+        let file_name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("config.toml");
+
+        let temp_file_name = format!(
+            ".{}.tmp.{}_{}_{}",
+            file_name,
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos(),
+            TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed)
+        );
+        let temp_path = parent.join(temp_file_name);
+
+        let mut temp_file = tokio::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp_path)
+            .await?;
+
+        let write_result: Result<(), std::io::Error> = async {
+            temp_file.write_all(toml_str.as_bytes()).await?;
+            temp_file.flush().await?;
+            temp_file.sync_all().await?;
+            Ok(())
+        }
+        .await;
+
+        drop(temp_file);
+
+        if let Err(e) = write_result {
+            let _ = tokio::fs::remove_file(&temp_path).await;
+            return Err(Box::new(e));
+        }
+
+        if let Err(e) = tokio::fs::rename(&temp_path, path).await {
+            let _ = tokio::fs::remove_file(&temp_path).await;
+            return Err(Box::new(e));
+        }
+
         Ok(())
     }
 
-    pub fn load_or_init<P: AsRef<Path>>(path: P) -> Self {
+    pub async fn load_or_init<P: AsRef<Path>>(path: P) -> Self {
         let path = path.as_ref();
-        if path.exists() {
-            match Self::load_from_file(path) {
-                Ok(config) => config,
-                Err(err) => {
+        match tokio::fs::try_exists(path).await {
+            Ok(true) => {
+                match Self::load_from_file(path).await {
+                    Ok(config) => config,
+                    Err(err) => {
+                        eprintln!(
+                            "Fehler beim Laden der Konfiguration von {}: {}. Standardwerte werden verwendet.",
+                            path.display(),
+                            err
+                        );
+                        Self::default()
+                    }
+                }
+            }
+            Ok(false) => {
+                let default_config = Self::default();
+                if let Err(err) = default_config.save_to_file(path).await {
                     eprintln!(
-                        "Fehler beim Laden der Konfiguration von {}: {}. Standardwerte werden verwendet.",
+                        "Fehler beim Erstellen der Standardkonfiguration unter {}: {}",
                         path.display(),
                         err
                     );
-                    let default_config = Self::default();
-                    if let Err(save_err) = default_config.save_to_file(path) {
-                        eprintln!(
-                            "Fehler beim Speichern der Standardkonfiguration: {}",
-                            save_err
-                        );
-                    }
-                    default_config
                 }
+                default_config
             }
-        } else {
-            let default_config = Self::default();
-            if let Err(err) = default_config.save_to_file(path) {
+            Err(err) => {
                 eprintln!(
-                    "Fehler beim Erstellen der Standardkonfiguration unter {}: {}",
+                    "Fehler beim Überprüfen der Konfiguration unter {}: {}. Standardwerte werden verwendet.",
                     path.display(),
                     err
                 );
+                Self::default()
             }
-            default_config
         }
     }
 }
@@ -283,8 +339,8 @@ mod tests {
         assert_eq!(config.default_action_duration, initial_duration);
     }
 
-    #[test]
-    fn test_save_and_load_file_roundtrip() {
+    #[tokio::test]
+    async fn test_save_and_load_file_roundtrip() {
         let temp_dir = std::env::temp_dir().join(format!("ubtech_test_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
         let config_path = temp_dir.join("subdir").join("config.toml");
 
@@ -296,32 +352,32 @@ mod tests {
         config.workdir = "/path/to/workdir".to_string();
         config.venv = "/path/to/venv".to_string();
 
-        assert!(config.save_to_file(&config_path).is_ok());
+        assert!(config.save_to_file(&config_path).await.is_ok());
         assert!(config_path.exists());
 
-        let loaded = Config::load_from_file(&config_path).expect("failed to load config");
+        let loaded = Config::load_from_file(&config_path).await.expect("failed to load config");
         assert_eq!(loaded, config);
 
-        let _ = std::fs::remove_dir_all(&temp_dir);
+        let _ = tokio::fs::remove_dir_all(&temp_dir).await;
     }
 
-    #[test]
-    fn test_load_from_file_invalid_toml() {
+    #[tokio::test]
+    async fn test_load_from_file_invalid_toml() {
         let temp_dir = std::env::temp_dir().join(format!("ubtech_test_inv_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
         let config_path = temp_dir.join("config.toml");
-        std::fs::create_dir_all(&temp_dir).unwrap();
-        std::fs::write(&config_path, "invalid toml content = ==").unwrap();
+        tokio::fs::create_dir_all(&temp_dir).await.unwrap();
+        tokio::fs::write(&config_path, "invalid toml content = ==").await.unwrap();
 
-        assert!(Config::load_from_file(&config_path).is_err());
+        assert!(Config::load_from_file(&config_path).await.is_err());
 
-        let _ = std::fs::remove_dir_all(&temp_dir);
+        let _ = tokio::fs::remove_dir_all(&temp_dir).await;
     }
 
-    #[test]
-    fn test_load_from_file_invalid_validation() {
+    #[tokio::test]
+    async fn test_load_from_file_invalid_validation() {
         let temp_dir = std::env::temp_dir().join(format!("ubtech_test_val_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
         let config_path = temp_dir.join("config.toml");
-        std::fs::create_dir_all(&temp_dir).unwrap();
+        tokio::fs::create_dir_all(&temp_dir).await.unwrap();
         let invalid_content = r#"
 mac_address = "invalid_mac"
 default_delay = 500
@@ -330,38 +386,143 @@ python_sdk = ""
 workdir = ""
 venv = ""
 "#;
-        std::fs::write(&config_path, invalid_content).unwrap();
+        tokio::fs::write(&config_path, invalid_content).await.unwrap();
 
-        assert!(Config::load_from_file(&config_path).is_err());
+        assert!(Config::load_from_file(&config_path).await.is_err());
 
-        let _ = std::fs::remove_dir_all(&temp_dir);
+        let _ = tokio::fs::remove_dir_all(&temp_dir).await;
     }
 
-    #[test]
-    fn test_load_or_init_creates_default_when_missing() {
+    #[tokio::test]
+    async fn test_load_or_init_creates_default_when_missing() {
         let temp_dir = std::env::temp_dir().join(format!("ubtech_test_init_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
         let config_path = temp_dir.join("config.toml");
 
-        let loaded = Config::load_or_init(&config_path);
+        let loaded = Config::load_or_init(&config_path).await;
         assert_eq!(loaded, Config::default());
         assert!(config_path.exists());
 
-        let loaded_again = Config::load_from_file(&config_path).unwrap();
+        let loaded_again = Config::load_from_file(&config_path).await.unwrap();
         assert_eq!(loaded_again, Config::default());
 
-        let _ = std::fs::remove_dir_all(&temp_dir);
+        let _ = tokio::fs::remove_dir_all(&temp_dir).await;
     }
 
-    #[test]
-    fn test_load_or_init_recovers_when_corrupted() {
+    #[tokio::test]
+    async fn test_load_or_init_preserves_corrupted_file_and_does_not_overwrite() {
         let temp_dir = std::env::temp_dir().join(format!("ubtech_test_corrupt_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
         let config_path = temp_dir.join("config.toml");
-        std::fs::create_dir_all(&temp_dir).unwrap();
-        std::fs::write(&config_path, "corrupted = true [[[invalid").unwrap();
+        tokio::fs::create_dir_all(&temp_dir).await.unwrap();
+        let corrupted_content = "corrupted = true [[[invalid";
+        tokio::fs::write(&config_path, corrupted_content).await.unwrap();
 
-        let loaded = Config::load_or_init(&config_path);
+        let loaded = Config::load_or_init(&config_path).await;
         assert_eq!(loaded, Config::default());
 
-        let _ = std::fs::remove_dir_all(&temp_dir);
+        // Ensure the corrupted file was NOT overwritten with default values
+        let file_content = tokio::fs::read_to_string(&config_path).await.unwrap();
+        assert_eq!(file_content, corrupted_content);
+
+        let _ = tokio::fs::remove_dir_all(&temp_dir).await;
+    }
+
+    #[tokio::test]
+    async fn test_failed_write_preserves_previous_configuration() {
+        let temp_dir = std::env::temp_dir().join(format!("ubtech_test_failed_write_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let config_path = temp_dir.join("config.toml");
+
+        let mut valid_config = Config::default();
+        valid_config.mac_address = "AA:BB:CC:DD:EE:FF".to_string();
+        valid_config.default_delay = 800;
+        assert!(valid_config.save_to_file(&config_path).await.is_ok());
+
+        // Attempt to save an invalid configuration that fails validation
+        let invalid_config = Config {
+            mac_address: "invalid-mac".to_string(),
+            default_delay: 500,
+            default_action_duration: 50,
+            python_sdk: String::new(),
+            workdir: String::new(),
+            venv: String::new(),
+        };
+
+        assert!(invalid_config.save_to_file(&config_path).await.is_err());
+
+        // Verify the original valid configuration on disk is intact
+        let loaded = Config::load_from_file(&config_path).await.unwrap();
+        assert_eq!(loaded, valid_config);
+
+        let _ = tokio::fs::remove_dir_all(&temp_dir).await;
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_writes_do_not_corrupt_file() {
+        let temp_dir = std::env::temp_dir().join(format!("ubtech_test_concurrent_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let config_path = temp_dir.join("config.toml");
+
+        let mut handles = Vec::new();
+        for i in 0..50 {
+            let path = config_path.clone();
+            let handle = tokio::spawn(async move {
+                let mut config = Config::default();
+                config.default_delay = (i % 2000) as usize;
+                config.default_action_duration = 50 + (i % 50) as usize;
+                config.workdir = format!("/workdir/task_{}", i);
+                config.save_to_file(&path).await
+            });
+            handles.push(handle);
+        }
+
+        for handle in handles {
+            let res = handle.await.expect("task panicked");
+            assert!(res.is_ok());
+        }
+
+        // Verify that the final file is valid TOML and deserializes cleanly
+        let loaded = Config::load_from_file(&config_path).await;
+        assert!(loaded.is_ok(), "Config on disk corrupted by concurrent writes: {:?}", loaded.err());
+
+        let _ = tokio::fs::remove_dir_all(&temp_dir).await;
+    }
+
+    #[tokio::test]
+    async fn test_persistence_across_restarts() {
+        let temp_dir = std::env::temp_dir().join(format!("ubtech_test_restart_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let config_path = temp_dir.join("config.toml");
+
+        let mut initial_config = Config::default();
+        initial_config.mac_address = "12:34:56:78:9A:BC".to_string();
+        initial_config.default_delay = 1200;
+        initial_config.default_action_duration = 150;
+        initial_config.python_sdk = "/usr/bin/python3".to_string();
+        initial_config.workdir = "/app/workdir".to_string();
+        initial_config.venv = "/app/venv".to_string();
+
+        assert!(initial_config.save_to_file(&config_path).await.is_ok());
+
+        // Simulate app restart by calling load_or_init on the existing path
+        let restarted_config = Config::load_or_init(&config_path).await;
+        assert_eq!(restarted_config, initial_config);
+
+        let _ = tokio::fs::remove_dir_all(&temp_dir).await;
+    }
+
+    #[tokio::test]
+    async fn test_atomic_write_leaves_no_temp_files() {
+        let temp_dir = std::env::temp_dir().join(format!("ubtech_test_notemp_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let config_path = temp_dir.join("config.toml");
+
+        let config = Config::default();
+        assert!(config.save_to_file(&config_path).await.is_ok());
+
+        let mut read_dir = tokio::fs::read_dir(&temp_dir).await.unwrap();
+        let mut file_names = Vec::new();
+        while let Some(entry) = read_dir.next_entry().await.unwrap() {
+            file_names.push(entry.file_name().to_string_lossy().to_string());
+        }
+
+        assert_eq!(file_names, vec!["config.toml"]);
+
+        let _ = tokio::fs::remove_dir_all(&temp_dir).await;
     }
 }
