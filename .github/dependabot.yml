@@ -1,0 +1,9 @@
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /src-tauri
+    schedule:
+      interval: weekly
+    ignore:
+      # Tauri's WebKitGTK stack requires GTK-rs 0.18, which cannot use glib 0.20.
+      - dependency-name: glib
