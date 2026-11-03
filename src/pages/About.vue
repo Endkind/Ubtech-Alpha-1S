@@ -37,6 +37,7 @@ const repositoryLinks = [
 const technologies: LinkItem[] = [
   { name: 'Tauri', description: 'Leichtes Desktop-Framework', tag: 'Backend & App Shell', url: 'https://tauri.app' },
   { name: 'Vue.js', description: 'Reaktives Frontend-Framework', tag: 'UI Framework', url: 'https://vuejs.org' },
+  { name: 'Pinia', description: 'Intuitive State-Management-Bibliothek für Vue', tag: 'State Management', url: 'https://pinia.vuejs.org' },
   { name: 'Tailwind CSS', description: 'Utility-First CSS Framework', tag: 'Styling', url: 'https://tailwindcss.com' },
   { name: 'daisyUI', description: 'Komponenten-Bibliothek für Tailwind', tag: 'UI Components', url: 'https://daisyui.com' },
   { name: 'Heroicons', description: 'Saubere Icon-Bibliothek', tag: 'Icons', url: 'https://heroicons.com' },
