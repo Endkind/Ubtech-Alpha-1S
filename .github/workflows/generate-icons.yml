@@ -2,6 +2,9 @@ name: Generate Tauri Icons
 
 on:
   push:
+    branches:
+      - main
+      - master
     paths:
       - "app-icon.png"
   workflow_dispatch:
