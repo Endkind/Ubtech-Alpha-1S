@@ -15,7 +15,7 @@
     AdjustmentsHorizontalIcon,
   } from "@heroicons/vue/24/outline";
 
-  const MAC_REGEX = /^([0-9A-Fa-f]{2}[:\-]){5}([0-9A-Fa-f]{2})$/;
+  const MAC_REGEX = /^(([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}|([0-9A-Fa-f]{2}-){5}[0-9A-Fa-f]{2})$/;
 
   const mac_address = ref<string>('');
   const mac_address_input = useTemplateRef<HTMLInputElement>('mac-input');

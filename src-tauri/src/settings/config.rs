@@ -123,6 +123,23 @@ mod tests {
     }
 
     #[test]
+    fn test_valid_hyphen_mac_update() {
+        let mut config = Config::default();
+
+        let update = UpdateConfig {
+            mac_address: Some("AA-BB-CC-DD-EE-FF".to_string()),
+            default_delay: None,
+            default_action_duration: None,
+            python_sdk: None,
+            workdir: None,
+            venv: None,
+        };
+
+        assert!(config.update(update).is_ok());
+        assert_eq!(config.mac_address, "AA-BB-CC-DD-EE-FF");
+    }
+
+    #[test]
     fn test_invalid_mac_does_not_mutate_config() {
         let mut config = Config::default();
         let initial_mac = config.mac_address.clone();
@@ -130,6 +147,27 @@ mod tests {
 
         let update = UpdateConfig {
             mac_address: Some("invalid-mac".to_string()),
+            default_delay: None,
+            default_action_duration: None,
+            python_sdk: None,
+            workdir: None,
+            venv: None,
+        };
+
+        let result = config.update(update);
+        assert!(result.is_err());
+        assert_eq!(config.mac_address, initial_mac);
+        assert_eq!(config.default_delay, initial_delay);
+    }
+
+    #[test]
+    fn test_mixed_separator_mac_does_not_mutate_config() {
+        let mut config = Config::default();
+        let initial_mac = config.mac_address.clone();
+        let initial_delay = config.default_delay;
+
+        let update = UpdateConfig {
+            mac_address: Some("00:11-22:33-44:55".to_string()),
             default_delay: None,
             default_action_duration: None,
             python_sdk: None,
