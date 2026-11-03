@@ -227,6 +227,7 @@
             autocomplete="off"
             spellcheck="false"
             title="Bitte eine gültige MAC-Adresse eingeben (z. B. 00:11:22:33:44:55 oder 00-11-22-33-44-55)"
+            :disabled="is_saving"
             v-model="mac_address"
           />
           <p class="validator-hint hidden text-xs text-error mt-1">
@@ -260,6 +261,7 @@
                 max="200"
                 step="5"
                 class="range range-warning w-full"
+                :disabled="is_saving"
                 v-model.number="default_action_duration"
               />
               <div class="flex justify-between text-xs text-base-content/60 font-mono">
@@ -288,6 +290,7 @@
                 max="2000"
                 step="100"
                 class="range range-primary w-full"
+                :disabled="is_saving"
                 v-model.number="default_delay"
               />
               <div class="flex justify-between text-xs text-base-content/60 font-mono">
@@ -326,11 +329,13 @@
                 aria-label="Ubtech Alpha 1S SDK Pfad zur Python-Main-Datei"
                 class="input w-full font-mono text-sm"
                 :placeholder="python_sdk_placeholder"
+                :disabled="is_saving"
                 v-model="python_sdk"
               />
               <button
                 type="button"
                 class="btn btn-outline gap-2 shrink-0"
+                :disabled="is_saving"
                 @click="selectPythonSdk"
               >
                 <DocumentIcon class="size-4" />
@@ -355,11 +360,13 @@
                 aria-label="Arbeitsverzeichnis Pfad"
                 class="input w-full font-mono text-sm"
                 :placeholder="workdir_placeholder"
+                :disabled="is_saving"
                 v-model="workdir"
               />
               <button
                 type="button"
                 class="btn btn-outline gap-2 shrink-0"
+                :disabled="is_saving"
                 @click="selectWorkdir"
               >
                 <FolderOpenIcon class="size-4" />
@@ -384,11 +391,13 @@
                 aria-label="Virtuelle Umgebung Pfad"
                 class="input w-full font-mono text-sm"
                 :placeholder="venv_placeholder"
+                :disabled="is_saving"
                 v-model="venv"
               />
               <button
                 type="button"
                 class="btn btn-outline gap-2 shrink-0"
+                :disabled="is_saving"
                 @click="selectVenv"
               >
                 <FolderOpenIcon class="size-4" />

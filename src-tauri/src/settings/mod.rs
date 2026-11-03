@@ -5,13 +5,13 @@ use crate::settings::config::{Config, UpdateConfig};
 pub mod config;
 
 #[tauri::command]
-pub fn get_settings(state: State<'_, AppState>) -> Result<Config, String> {
+pub async fn get_settings(state: State<'_, AppState>) -> Result<Config, String> {
     let settings = state.settings.lock().map_err(|e| e.to_string())?;
     Ok(settings.clone())
 }
 
 #[tauri::command]
-pub fn save_settings(
+pub async fn save_settings(
     update: UpdateConfig,
     state: State<'_, AppState>,
 ) -> Result<Config, String> {
