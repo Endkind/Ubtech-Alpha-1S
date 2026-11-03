@@ -2,6 +2,7 @@
   import { computed, onMounted, ref, useTemplateRef } from "vue";
   import { invoke } from "@tauri-apps/api/core";
   import { Config as ConfigSchema } from "@ts/schemas/config.ts";
+  import { dirname, join } from "@ts/utils/path.ts";
   import {
     SignalIcon,
     ClockIcon,
@@ -54,15 +55,6 @@
       : 'z. B. /home/user/Ubtech-Alpha-1S-SDK/.venv'
   );
 
-  function getDirAndSep(pathStr: string): { dir: string; sep: string } {
-    const lastSlash = pathStr.lastIndexOf('/');
-    const lastBackslash = pathStr.lastIndexOf('\\');
-    const lastIndex = Math.max(lastSlash, lastBackslash);
-    const sep = lastBackslash > lastSlash ? '\\' : (lastSlash >= 0 ? '/' : (is_windows.value ? '\\' : '/'));
-    const dir = lastIndex > 0 ? pathStr.slice(0, lastIndex) : pathStr;
-    return { dir, sep };
-  }
-
   async function selectPythonSdk() {
     try {
       const selected = await invoke<string | null>("pick_file", {
@@ -73,14 +65,11 @@
 
       if (selected) {
         python_sdk.value = selected;
-        if (selected.includes('/') || selected.includes('\\')) {
-          const { dir, sep } = getDirAndSep(selected);
-          if (!workdir.value) {
-            workdir.value = dir;
-          }
-          if (!venv.value) {
-            venv.value = `${dir}${sep}.venv`;
-          }
+        if (!workdir.value || workdir.value.trim() === '') {
+          workdir.value = await dirname(selected);
+        }
+        if (!venv.value || venv.value.trim() === '') {
+          venv.value = await join(workdir.value, ".venv");
         }
       }
     } catch (error) {
@@ -96,12 +85,11 @@
 
       if (selected) {
         workdir.value = selected;
-        const sep = selected.includes('\\') || is_windows.value ? '\\' : '/';
-        if (!python_sdk.value) {
-          python_sdk.value = `${selected}${sep}main.py`;
+        if (!python_sdk.value || python_sdk.value.trim() === '') {
+          python_sdk.value = await join(selected, "main.py");
         }
-        if (!venv.value) {
-          venv.value = `${selected}${sep}.venv`;
+        if (!venv.value || venv.value.trim() === '') {
+          venv.value = await join(selected, ".venv");
         }
       }
     } catch (error) {
@@ -117,14 +105,11 @@
 
       if (selected) {
         venv.value = selected;
-        if (selected.includes('/') || selected.includes('\\')) {
-          const { dir, sep } = getDirAndSep(selected);
-          if (!workdir.value) {
-            workdir.value = dir;
-          }
-          if (!python_sdk.value) {
-            python_sdk.value = `${dir}${sep}main.py`;
-          }
+        if (!workdir.value || workdir.value.trim() === '') {
+          workdir.value = await dirname(selected);
+        }
+        if (!python_sdk.value || python_sdk.value.trim() === '') {
+          python_sdk.value = await join(workdir.value, "main.py");
         }
       }
     } catch (error) {
