@@ -7,3 +7,4 @@ repos:
       - id: trailing-whitespace
       - id: check-yaml
       - id: check-added-large-files
+        exclude: (?i)\.(png|jpe?g|gif|webp|ico|svg|bmp|tiff?)$
