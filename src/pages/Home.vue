@@ -41,6 +41,7 @@ function navigateTo(page: Page) {
           </div>
           <div class="flex items-center gap-3">
             <button
+              type="button"
               class="btn btn-primary shadow-lg shadow-primary/20 gap-2"
               @click="navigateTo(PAGES.EDITOR)"
             >
@@ -48,6 +49,7 @@ function navigateTo(page: Page) {
               <span>Editor öffnen</span>
             </button>
             <button
+              type="button"
               class="btn btn-outline gap-2"
               @click="navigateTo(PAGES.LIBRARY)"
             >
@@ -67,8 +69,13 @@ function navigateTo(page: Page) {
       <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
         <!-- Editor Card -->
         <div
-          class="card bg-base-100 shadow-xl border border-base-200 hover:border-primary/60 hover:shadow-2xl transition-all duration-300 cursor-pointer group flex flex-col justify-between"
+          role="button"
+          tabindex="0"
+          aria-label="Editor öffnen"
+          class="card bg-base-100 shadow-xl border border-base-200 hover:border-primary/60 hover:shadow-2xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-base-100 transition-all duration-300 cursor-pointer group flex flex-col justify-between"
           @click="navigateTo(PAGES.EDITOR)"
+          @keydown.enter="navigateTo(PAGES.EDITOR)"
+          @keydown.space.prevent="navigateTo(PAGES.EDITOR)"
         >
           <div class="card-body p-6">
             <div class="flex items-start justify-between mb-4">
@@ -95,8 +102,13 @@ function navigateTo(page: Page) {
 
         <!-- Library Card -->
         <div
-          class="card bg-base-100 shadow-xl border border-base-200 hover:border-secondary/60 hover:shadow-2xl transition-all duration-300 cursor-pointer group flex flex-col justify-between"
+          role="button"
+          tabindex="0"
+          aria-label="Bibliothek öffnen"
+          class="card bg-base-100 shadow-xl border border-base-200 hover:border-secondary/60 hover:shadow-2xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-secondary focus-visible:ring-offset-2 focus-visible:ring-offset-base-100 transition-all duration-300 cursor-pointer group flex flex-col justify-between"
           @click="navigateTo(PAGES.LIBRARY)"
+          @keydown.enter="navigateTo(PAGES.LIBRARY)"
+          @keydown.space.prevent="navigateTo(PAGES.LIBRARY)"
         >
           <div class="card-body p-6">
             <div class="flex items-start justify-between mb-4">
@@ -129,8 +141,13 @@ function navigateTo(page: Page) {
       <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
         <!-- Settings Link Card -->
         <div
-          class="card bg-base-100 shadow-md border border-base-200 hover:border-base-300 hover:bg-base-200/30 transition-all cursor-pointer p-4 group"
+          role="button"
+          tabindex="0"
+          aria-label="Einstellungen öffnen"
+          class="card bg-base-100 shadow-md border border-base-200 hover:border-base-300 hover:bg-base-200/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-base-100 transition-all cursor-pointer p-4 group"
           @click="navigateTo(PAGES.SETTINGS)"
+          @keydown.enter="navigateTo(PAGES.SETTINGS)"
+          @keydown.space.prevent="navigateTo(PAGES.SETTINGS)"
         >
           <div class="flex items-center gap-4">
             <div class="p-2.5 bg-base-200 rounded-xl text-base-content/80 group-hover:text-primary transition-colors">
@@ -146,8 +163,13 @@ function navigateTo(page: Page) {
 
         <!-- About Link Card -->
         <div
-          class="card bg-base-100 shadow-md border border-base-200 hover:border-base-300 hover:bg-base-200/30 transition-all cursor-pointer p-4 group"
+          role="button"
+          tabindex="0"
+          aria-label="Über dieses Projekt öffnen"
+          class="card bg-base-100 shadow-md border border-base-200 hover:border-base-300 hover:bg-base-200/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-base-100 transition-all cursor-pointer p-4 group"
           @click="navigateTo(PAGES.ABOUT)"
+          @keydown.enter="navigateTo(PAGES.ABOUT)"
+          @keydown.space.prevent="navigateTo(PAGES.ABOUT)"
         >
           <div class="flex items-center gap-4">
             <div class="p-2.5 bg-base-200 rounded-xl text-base-content/80 group-hover:text-primary transition-colors">

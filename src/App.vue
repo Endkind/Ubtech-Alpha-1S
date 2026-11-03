@@ -43,7 +43,15 @@
     <div class="drawer-content flex flex-col h-full overflow-hidden">
       <!-- Navbar -->
       <nav class="navbar w-full bg-base-300">
-        <label for="drawer" aria-label="open sidebar" class="btn btn-square btn-ghost drawer-button">
+        <label
+          for="drawer"
+          tabindex="0"
+          role="button"
+          aria-label="Seitenleiste umschalten"
+          class="btn btn-square btn-ghost drawer-button"
+          @keydown.enter.prevent="($event.target as HTMLElement).click()"
+          @keydown.space.prevent="($event.target as HTMLElement).click()"
+        >
           <!-- Sidebar toggle icon -->
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" stroke-linejoin="round" stroke-linecap="round" stroke-width="2" fill="none" stroke="currentColor" class="my-1.5 inline-block size-4"><path d="M4 4m0 2a2 2 0 0 1 2 -2h12a2 2 0 0 1 2 2v12a2 2 0 0 1 -2 2h-12a2 2 0 0 1 -2 -2z"></path><path d="M9 4v16"></path><path d="M14 10l2 2l-2 2"></path></svg>
         </label>
@@ -68,9 +76,12 @@
         <ul class="menu w-full grow">
           <li v-for="page in PAGES" :key="page.display_name">
             <button
+                type="button"
                 class="is-drawer-close:tooltip is-drawer-close:tooltip-right"
+                :class="{ active: pages_store.current_page === page }"
                 :data-tip="page.display_name"
                 :aria-label="page.display_name"
+                :aria-current="pages_store.current_page === page ? 'page' : undefined"
                 @click="pages_store.set_page(page)"
             >
               <component
@@ -89,6 +100,7 @@
             :href="releaseUrl"
             class="text-xs font-mono text-base-content/60 hover:text-primary transition-colors block truncate cursor-pointer py-1"
             @click.prevent="openRelease"
+            @keydown.space.prevent="openRelease"
           >
             {{ releaseTag }}
           </a>

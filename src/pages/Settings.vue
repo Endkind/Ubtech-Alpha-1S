@@ -180,7 +180,7 @@
     } catch (error) {
       console.warn("Plattform konnte nicht über Tauri ermittelt werden, Fallback auf userAgent:", error);
     }
-    get_settings();
+    await get_settings();
   });
 </script>
 
@@ -217,6 +217,7 @@
             ref="mac-input"
             type="text"
             id="mac"
+            aria-label="MAC-Adresse"
             class="input validator w-full max-w-md font-mono"
             required
             placeholder="00:00:00:00:00:00"
@@ -254,6 +255,7 @@
               <input
                 type="range"
                 id="default_action_duration"
+                aria-label="Standarddauer einer Aktion in Millisekunden"
                 min="10"
                 max="200"
                 step="5"
@@ -281,6 +283,7 @@
               <input
                 type="range"
                 id="default_delay"
+                aria-label="Standard-Verzögerung in Millisekunden"
                 min="0"
                 max="2000"
                 step="100"
@@ -320,6 +323,7 @@
               <input
                 type="text"
                 id="python_sdk"
+                aria-label="Ubtech Alpha 1S SDK Pfad zur Python-Main-Datei"
                 class="input w-full font-mono text-sm"
                 :placeholder="python_sdk_placeholder"
                 v-model="python_sdk"
@@ -348,6 +352,7 @@
               <input
                 type="text"
                 id="workdir"
+                aria-label="Arbeitsverzeichnis Pfad"
                 class="input w-full font-mono text-sm"
                 :placeholder="workdir_placeholder"
                 v-model="workdir"
@@ -376,6 +381,7 @@
               <input
                 type="text"
                 id="venv"
+                aria-label="Virtuelle Umgebung Pfad"
                 class="input w-full font-mono text-sm"
                 :placeholder="venv_placeholder"
                 v-model="venv"
@@ -400,6 +406,7 @@
     <!-- Speichern Button & Status -->
     <div class="flex items-center gap-4">
       <button
+        type="button"
         class="btn btn-primary gap-2 shadow-lg shadow-primary/20"
         :disabled="!enable_save_btn || is_saving"
         @click="save"

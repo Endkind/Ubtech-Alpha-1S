@@ -110,7 +110,7 @@ const aiAssistants: LinkItem[] = [
           href="https://github.com/Endkind"
           target="_blank"
           rel="noopener noreferrer"
-          class="card bg-base-100 shadow-xl border border-base-200 hover:border-primary/50 transition-all cursor-pointer group"
+          class="card bg-base-100 shadow-xl border border-base-200 hover:border-primary/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-base-100 transition-all cursor-pointer group"
       >
         <div class="card-body">
           <div class="flex items-center justify-between mb-2">
@@ -144,7 +144,7 @@ const aiAssistants: LinkItem[] = [
             <a
                 v-for="item in repositoryLinks"
                 :key="item.name"
-                class="p-3 bg-base-200/50 hover:bg-base-200 rounded-xl border border-base-200 hover:border-primary/40 transition-all cursor-pointer flex flex-col justify-between group"
+                class="p-3 bg-base-200/50 hover:bg-base-200 rounded-xl border border-base-200 hover:border-primary/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-base-100 transition-all cursor-pointer flex flex-col justify-between group"
                 :href="item.url"
                 target="_blank"
                 rel="noopener noreferrer"
@@ -184,7 +184,7 @@ const aiAssistants: LinkItem[] = [
           <a
               v-for="tech in technologies"
               :key="tech.name"
-              class="p-3 bg-base-200/50 hover:bg-base-200 rounded-xl border border-base-200 hover:border-primary/40 transition-all cursor-pointer flex flex-col justify-between group"
+              class="p-3 bg-base-200/50 hover:bg-base-200 rounded-xl border border-base-200 hover:border-primary/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-base-100 transition-all cursor-pointer flex flex-col justify-between group"
               :href="tech.url"
               target="_blank"
               rel="noopener noreferrer"
@@ -222,7 +222,7 @@ const aiAssistants: LinkItem[] = [
           <a
               v-for="ai in aiAssistants"
               :key="ai.name"
-              class="p-3 bg-base-200/50 hover:bg-base-200 rounded-xl border border-base-200 hover:border-accent/40 transition-all cursor-pointer flex flex-col justify-between group"
+              class="p-3 bg-base-200/50 hover:bg-base-200 rounded-xl border border-base-200 hover:border-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-base-100 transition-all cursor-pointer flex flex-col justify-between group"
               :href="ai.url"
               target="_blank"
               rel="noopener noreferrer"
