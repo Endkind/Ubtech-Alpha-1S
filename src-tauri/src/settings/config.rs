@@ -1,8 +1,9 @@
+use std::path::Path;
 use serde::{Deserialize, Serialize};
 use validator::Validate;
 use crate::validator::regex::MAC_ADDRESS as MAC_ADDRESS_REGEX;
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct UpdateConfig {
     pub mac_address: Option<String>,
     pub default_delay: Option<usize>,
@@ -12,7 +13,7 @@ pub struct UpdateConfig {
     pub venv: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Validate)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Validate)]
 pub struct Config {
     #[validate(regex(path = *MAC_ADDRESS_REGEX, message = "Bitte eine gültige MAC-Adresse eingeben (z. B. 00:11:22:33:44:55 oder 00-11-22-33-44-55)"))]
     pub mac_address: String,
@@ -60,6 +61,58 @@ impl Config {
         *self = new_config;
 
         Ok(())
+    }
+
+    pub fn load_from_file<P: AsRef<Path>>(path: P) -> Result<Self, Box<dyn std::error::Error>> {
+        let content = std::fs::read_to_string(path)?;
+        let config: Config = toml::from_str(&content)?;
+        config.validate()?;
+        Ok(config)
+    }
+
+    pub fn save_to_file<P: AsRef<Path>>(&self, path: P) -> Result<(), Box<dyn std::error::Error>> {
+        self.validate()?;
+        let path = path.as_ref();
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let toml_str = toml::to_string_pretty(self)?;
+        std::fs::write(path, toml_str)?;
+        Ok(())
+    }
+
+    pub fn load_or_init<P: AsRef<Path>>(path: P) -> Self {
+        let path = path.as_ref();
+        if path.exists() {
+            match Self::load_from_file(path) {
+                Ok(config) => config,
+                Err(err) => {
+                    eprintln!(
+                        "Fehler beim Laden der Konfiguration von {}: {}. Standardwerte werden verwendet.",
+                        path.display(),
+                        err
+                    );
+                    let default_config = Self::default();
+                    if let Err(save_err) = default_config.save_to_file(path) {
+                        eprintln!(
+                            "Fehler beim Speichern der Standardkonfiguration: {}",
+                            save_err
+                        );
+                    }
+                    default_config
+                }
+            }
+        } else {
+            let default_config = Self::default();
+            if let Err(err) = default_config.save_to_file(path) {
+                eprintln!(
+                    "Fehler beim Erstellen der Standardkonfiguration unter {}: {}",
+                    path.display(),
+                    err
+                );
+            }
+            default_config
+        }
     }
 }
 
@@ -228,5 +281,87 @@ mod tests {
         };
         assert!(config.update(update_too_high).is_err());
         assert_eq!(config.default_action_duration, initial_duration);
+    }
+
+    #[test]
+    fn test_save_and_load_file_roundtrip() {
+        let temp_dir = std::env::temp_dir().join(format!("ubtech_test_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let config_path = temp_dir.join("subdir").join("config.toml");
+
+        let mut config = Config::default();
+        config.mac_address = "11:22:33:44:55:66".to_string();
+        config.default_delay = 750;
+        config.default_action_duration = 100;
+        config.python_sdk = "/path/to/sdk.py".to_string();
+        config.workdir = "/path/to/workdir".to_string();
+        config.venv = "/path/to/venv".to_string();
+
+        assert!(config.save_to_file(&config_path).is_ok());
+        assert!(config_path.exists());
+
+        let loaded = Config::load_from_file(&config_path).expect("failed to load config");
+        assert_eq!(loaded, config);
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_load_from_file_invalid_toml() {
+        let temp_dir = std::env::temp_dir().join(format!("ubtech_test_inv_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let config_path = temp_dir.join("config.toml");
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        std::fs::write(&config_path, "invalid toml content = ==").unwrap();
+
+        assert!(Config::load_from_file(&config_path).is_err());
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_load_from_file_invalid_validation() {
+        let temp_dir = std::env::temp_dir().join(format!("ubtech_test_val_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let config_path = temp_dir.join("config.toml");
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let invalid_content = r#"
+mac_address = "invalid_mac"
+default_delay = 500
+default_action_duration = 50
+python_sdk = ""
+workdir = ""
+venv = ""
+"#;
+        std::fs::write(&config_path, invalid_content).unwrap();
+
+        assert!(Config::load_from_file(&config_path).is_err());
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_load_or_init_creates_default_when_missing() {
+        let temp_dir = std::env::temp_dir().join(format!("ubtech_test_init_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let config_path = temp_dir.join("config.toml");
+
+        let loaded = Config::load_or_init(&config_path);
+        assert_eq!(loaded, Config::default());
+        assert!(config_path.exists());
+
+        let loaded_again = Config::load_from_file(&config_path).unwrap();
+        assert_eq!(loaded_again, Config::default());
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_load_or_init_recovers_when_corrupted() {
+        let temp_dir = std::env::temp_dir().join(format!("ubtech_test_corrupt_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let config_path = temp_dir.join("config.toml");
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        std::fs::write(&config_path, "corrupted = true [[[invalid").unwrap();
+
+        let loaded = Config::load_or_init(&config_path);
+        assert_eq!(loaded, Config::default());
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }
