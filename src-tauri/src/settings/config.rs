@@ -726,6 +726,28 @@ pub async fn init_config_state<P: AsRef<Path>>(config_path: P) -> InitConfigResu
                                         }
                                         Err(save_err) => {
                                             eprintln!("Fehler beim Speichern der reparierten Konfiguration: {}", save_err);
+                                            let save_event = RecoveryEvent {
+                                                event_type: RecoveryEventType::Error,
+                                                title: "Speichern der reparierten Konfiguration fehlgeschlagen".to_string(),
+                                                description: "Die Konfiguration wurde erfolgreich repariert, konnte aber nicht gespeichert werden. Die ursprüngliche Datei bleibt unverändert und wird beim nächsten Start erneut repariert.".to_string(),
+                                                details: Some(RecoveryDetails {
+                                                    affected_file: Some(config_path.to_string_lossy().to_string()),
+                                                    error_cause: Some(save_err.to_string()),
+                                                    recovery_action: Some("Reparierte Konfiguration im Speicher verwendet".to_string()),
+                                                    source: Some("Reparierte Konfiguration".to_string()),
+                                                    result: Some("Reparatur nicht persistent, wiederholt sich beim Neustart".to_string()),
+                                                }),
+                                            };
+                                            return InitConfigResult {
+                                                config: orig_cfg,
+                                                is_recovery_mode: true,
+                                                conflict: None,
+                                                repair_report: Some(ConfigRepairReport {
+                                                    repairs: orig_report.repairs,
+                                                    unrecoverable_error: Some(format!("Save error: {}", save_err)),
+                                                    recovery_event: Some(save_event),
+                                                }),
+                                            };
                                         }
                                     }
                                 } else {
@@ -949,7 +971,36 @@ pub async fn init_config_state<P: AsRef<Path>>(config_path: P) -> InitConfigResu
                                     if report.has_repairs() {
                                         if let Err(save_err) = config.save_to_file(config_path).await {
                                             eprintln!("Fehler beim Speichern der reparierten Konfiguration: {}", save_err);
+                                            let save_event = RecoveryEvent {
+                                                event_type: RecoveryEventType::Error,
+                                                title: "Speichern der reparierten Konfiguration fehlgeschlagen".to_string(),
+                                                description: "Die Konfiguration wurde erfolgreich repariert, konnte aber nicht gespeichert werden. Die ursprüngliche Datei bleibt unverändert und wird beim nächsten Start erneut repariert.".to_string(),
+                                                details: Some(RecoveryDetails {
+                                                    affected_file: Some(config_path.to_string_lossy().to_string()),
+                                                    error_cause: Some(save_err.to_string()),
+                                                    recovery_action: Some("Reparierte Konfiguration im Speicher verwendet".to_string()),
+                                                    source: Some("Reparierte Konfiguration".to_string()),
+                                                    result: Some("Reparatur nicht persistent, wiederholt sich beim Neustart".to_string()),
+                                                }),
+                                            };
+                                            return InitConfigResult {
+                                                config,
+                                                is_recovery_mode: true,
+                                                conflict: None,
+                                                repair_report: Some(ConfigRepairReport {
+                                                    repairs: report.repairs,
+                                                    unrecoverable_error: Some(format!("Save error: {}", save_err)),
+                                                    recovery_event: Some(save_event),
+                                                }),
+                                            };
                                         }
+                                    } else {
+                                        return InitConfigResult {
+                                            config,
+                                            is_recovery_mode: false,
+                                            conflict: None,
+                                            repair_report: if report.is_empty() { None } else { Some(report) },
+                                        };
                                     }
                                     InitConfigResult {
                                         config,
@@ -1033,7 +1084,36 @@ pub async fn init_config_state<P: AsRef<Path>>(config_path: P) -> InitConfigResu
                                     if report.has_repairs() {
                                         if let Err(save_err) = config.save_to_file(config_path).await {
                                             eprintln!("Fehler beim Speichern der reparierten Konfiguration: {}", save_err);
+                                            let save_event = RecoveryEvent {
+                                                event_type: RecoveryEventType::Error,
+                                                title: "Speichern der reparierten Konfiguration fehlgeschlagen".to_string(),
+                                                description: "Die Konfiguration wurde erfolgreich repariert, konnte aber nicht gespeichert werden. Die ursprüngliche Datei bleibt unverändert und wird beim nächsten Start erneut repariert.".to_string(),
+                                                details: Some(RecoveryDetails {
+                                                    affected_file: Some(config_path.to_string_lossy().to_string()),
+                                                    error_cause: Some(save_err.to_string()),
+                                                    recovery_action: Some("Reparierte Konfiguration im Speicher verwendet".to_string()),
+                                                    source: Some("Reparierte Konfiguration".to_string()),
+                                                    result: Some("Reparatur nicht persistent, wiederholt sich beim Neustart".to_string()),
+                                                }),
+                                            };
+                                            return InitConfigResult {
+                                                config,
+                                                is_recovery_mode: true,
+                                                conflict: None,
+                                                repair_report: Some(ConfigRepairReport {
+                                                    repairs: report.repairs,
+                                                    unrecoverable_error: Some(format!("Save error: {}", save_err)),
+                                                    recovery_event: Some(save_event),
+                                                }),
+                                            };
                                         }
+                                    } else {
+                                        return InitConfigResult {
+                                            config,
+                                            is_recovery_mode: false,
+                                            conflict: None,
+                                            repair_report: if report.is_empty() { None } else { Some(report) },
+                                        };
                                     }
                                     InitConfigResult {
                                         config,
@@ -1099,7 +1179,36 @@ pub async fn init_config_state<P: AsRef<Path>>(config_path: P) -> InitConfigResu
                                     if report.has_repairs() {
                                         if let Err(save_err) = config.save_to_file(config_path).await {
                                             eprintln!("Fehler beim Speichern der reparierten Konfiguration: {}", save_err);
+                                            let save_event = RecoveryEvent {
+                                                event_type: RecoveryEventType::Error,
+                                                title: "Speichern der reparierten Konfiguration fehlgeschlagen".to_string(),
+                                                description: "Die Konfiguration wurde erfolgreich repariert, konnte aber nicht gespeichert werden. Die ursprüngliche Datei bleibt unverändert und wird beim nächsten Start erneut repariert.".to_string(),
+                                                details: Some(RecoveryDetails {
+                                                    affected_file: Some(config_path.to_string_lossy().to_string()),
+                                                    error_cause: Some(save_err.to_string()),
+                                                    recovery_action: Some("Reparierte Konfiguration im Speicher verwendet".to_string()),
+                                                    source: Some("Reparierte Konfiguration".to_string()),
+                                                    result: Some("Reparatur nicht persistent, wiederholt sich beim Neustart".to_string()),
+                                                }),
+                                            };
+                                            return InitConfigResult {
+                                                config,
+                                                is_recovery_mode: true,
+                                                conflict: None,
+                                                repair_report: Some(ConfigRepairReport {
+                                                    repairs: report.repairs,
+                                                    unrecoverable_error: Some(format!("Save error: {}", save_err)),
+                                                    recovery_event: Some(save_event),
+                                                }),
+                                            };
                                         }
+                                    } else {
+                                        return InitConfigResult {
+                                            config,
+                                            is_recovery_mode: false,
+                                            conflict: None,
+                                            repair_report: if report.is_empty() { None } else { Some(report) },
+                                        };
                                     }
                                     InitConfigResult {
                                         config,
@@ -1165,7 +1274,36 @@ pub async fn init_config_state<P: AsRef<Path>>(config_path: P) -> InitConfigResu
                                     if report.has_repairs() {
                                         if let Err(save_err) = config.save_to_file(config_path).await {
                                             eprintln!("Fehler beim Speichern der reparierten Konfiguration: {}", save_err);
+                                            let save_event = RecoveryEvent {
+                                                event_type: RecoveryEventType::Error,
+                                                title: "Speichern der reparierten Konfiguration fehlgeschlagen".to_string(),
+                                                description: "Die Konfiguration wurde erfolgreich repariert, konnte aber nicht gespeichert werden. Die ursprüngliche Datei bleibt unverändert und wird beim nächsten Start erneut repariert.".to_string(),
+                                                details: Some(RecoveryDetails {
+                                                    affected_file: Some(config_path.to_string_lossy().to_string()),
+                                                    error_cause: Some(save_err.to_string()),
+                                                    recovery_action: Some("Reparierte Konfiguration im Speicher verwendet".to_string()),
+                                                    source: Some("Reparierte Konfiguration".to_string()),
+                                                    result: Some("Reparatur nicht persistent, wiederholt sich beim Neustart".to_string()),
+                                                }),
+                                            };
+                                            return InitConfigResult {
+                                                config,
+                                                is_recovery_mode: true,
+                                                conflict: None,
+                                                repair_report: Some(ConfigRepairReport {
+                                                    repairs: report.repairs,
+                                                    unrecoverable_error: Some(format!("Save error: {}", save_err)),
+                                                    recovery_event: Some(save_event),
+                                                }),
+                                            };
                                         }
+                                    } else {
+                                        return InitConfigResult {
+                                            config,
+                                            is_recovery_mode: false,
+                                            conflict: None,
+                                            repair_report: if report.is_empty() { None } else { Some(report) },
+                                        };
                                     }
                                     InitConfigResult {
                                         config,
@@ -1259,7 +1397,36 @@ async fn init_config_without_recovery(config_path: &Path, config_exists: bool) -
                 if report.has_repairs() {
                     if let Err(save_err) = config.save_to_file(config_path).await {
                         eprintln!("Fehler beim Speichern der reparierten Konfiguration: {}", save_err);
+                        let save_event = RecoveryEvent {
+                            event_type: RecoveryEventType::Error,
+                            title: "Speichern der reparierten Konfiguration fehlgeschlagen".to_string(),
+                            description: "Die Konfiguration wurde erfolgreich repariert, konnte aber nicht gespeichert werden. Die ursprüngliche Datei bleibt unverändert und wird beim nächsten Start erneut repariert.".to_string(),
+                            details: Some(RecoveryDetails {
+                                affected_file: Some(config_path.to_string_lossy().to_string()),
+                                error_cause: Some(save_err.to_string()),
+                                recovery_action: Some("Reparierte Konfiguration im Speicher verwendet".to_string()),
+                                source: Some("Reparierte Konfiguration".to_string()),
+                                result: Some("Reparatur nicht persistent, wiederholt sich beim Neustart".to_string()),
+                            }),
+                        };
+                        return InitConfigResult {
+                            config,
+                            is_recovery_mode: true,
+                            conflict: None,
+                            repair_report: Some(ConfigRepairReport {
+                                repairs: report.repairs,
+                                unrecoverable_error: Some(format!("Save error: {}", save_err)),
+                                recovery_event: Some(save_event),
+                            }),
+                        };
                     }
+                } else {
+                    return InitConfigResult {
+                        config,
+                        is_recovery_mode: false,
+                        conflict: None,
+                        repair_report: if report.is_empty() { None } else { Some(report) },
+                    };
                 }
                 InitConfigResult {
                     config,
@@ -2477,6 +2644,87 @@ venv = ""
         assert!(init_res.repair_report.is_some());
         let report = init_res.repair_report.unwrap();
         assert!(report.has_repairs());
+
+        let _ = tokio::fs::remove_dir_all(&temp_dir).await;
+    }
+
+    #[tokio::test]
+    async fn test_repaired_config_save_failure_enters_recovery_mode() {
+        // Test the fix for GitHub Copilot's reported issue:
+        // When persisting a repaired configuration fails, the branch must propagate
+        // the save failure into recovery state/report handling instead of silently
+        // continuing in normal mode with is_recovery_mode: false.
+        //
+        // We test via the recovery-exists + config-IO-error path:
+        // 1. Recovery file exists and is valid
+        // 2. Config path exists but is a directory (IO error on load)
+        // 3. The code falls back to recovery config, which triggers the IO-error branch
+        //
+        // However, the actual fix is in the "config loaded and repaired, but save fails" path.
+        // To test this reliably, we use the recovery-parse-error path:
+        // 1. Recovery file has parse error (unreadable TOML)
+        // 2. Config file exists with repairs needed
+        // 3. Config is loaded and repaired successfully
+        // 4. Saving the repaired config fails because parent dir is read-only
+        //
+        // On Windows, read-only on directory doesn't prevent writes in Temp.
+        // So we test the scenario where recovery has IO error (directory),
+        // config is loaded and repaired, and we verify the save error path
+        // by checking the code structure.
+        //
+        // Most reliable test: Recovery file is a directory (IO error on load),
+        // config file has repairs. The code loads config, repairs it, tries to save.
+        // We make the config file read-only so the atomic save (write temp + rename) fails.
+        let temp_dir = std::env::temp_dir().join(format!("ubtech_test_repair_save_fail_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        tokio::fs::create_dir_all(&temp_dir).await.unwrap();
+        let config_path = temp_dir.join("config.toml");
+        let recovery_path = get_recovery_path(&config_path);
+
+        // Create recovery file as directory to trigger IO error on recovery load
+        tokio::fs::create_dir_all(&recovery_path).await.unwrap();
+
+        // Create a config with string delay that will be converted (repair)
+        let config_toml = r#"
+mac_address = "AA:BB:CC:DD:EE:FF"
+default_delay = "800"
+default_action_duration = "100"
+python_sdk = ""
+workdir = ""
+venv = ""
+"#;
+        tokio::fs::write(&config_path, config_toml).await.unwrap();
+
+        // Make the config file read-only so the atomic save fails
+        let mut perms = std::fs::metadata(&config_path).unwrap().permissions();
+        perms.set_readonly(true);
+        std::fs::set_permissions(&config_path, perms).unwrap();
+
+        let init_res = init_config_state(&config_path).await;
+
+        // Reset read-only so cleanup works
+        let mut perms = std::fs::metadata(&config_path).unwrap().permissions();
+        perms.set_readonly(false);
+        std::fs::set_permissions(&config_path, perms).unwrap();
+
+        // Must enter recovery mode because save failed
+        assert!(init_res.is_recovery_mode, "Expected recovery mode when save of repaired config fails");
+
+        // Repair report must indicate the save error
+        assert!(init_res.repair_report.is_some(), "Repair report must be present");
+        let report = init_res.repair_report.as_ref().unwrap();
+        assert!(report.unrecoverable_error.is_some(), "Unrecoverable error must be set on save failure");
+        assert!(report.unrecoverable_error.as_ref().unwrap().contains("Save error"), 
+            "Error message must mention save error: {:?}", report.unrecoverable_error);
+
+        // Recovery event must be Error type
+        assert!(report.recovery_event.is_some(), "Recovery event must be present");
+        let event = report.recovery_event.as_ref().unwrap();
+        assert_eq!(event.event_type, RecoveryEventType::Error, "Event type must be Error");
+        assert_eq!(event.title, "Speichern der reparierten Konfiguration fehlgeschlagen");
+
+        // Config should still be usable in memory (repaired values)
+        assert_eq!(init_res.config.default_delay, 800);
+        assert_eq!(init_res.config.default_action_duration, 100);
 
         let _ = tokio::fs::remove_dir_all(&temp_dir).await;
     }
