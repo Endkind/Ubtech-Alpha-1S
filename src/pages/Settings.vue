@@ -176,9 +176,9 @@
     resetDialog.value?.close();
   }
 
-  function handleResetDialogCancel() {
+  function handleResetDialogCancel(event: Event) {
     if (is_resetting.value) {
-      resetDialog.value?.showModal();
+      event.preventDefault();
       return;
     }
     is_reset_modal_open.value = false;
