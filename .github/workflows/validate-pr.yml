@@ -34,10 +34,11 @@ jobs:
         id: find-pr
         if: github.event_name == 'push'
         run: |
-          PR_NUMBER=$(gh pr list --repo "$GITHUB_REPOSITORY" --head "${{ github.ref_name }}" --json number --jq '.[0].number')
+          PR_NUMBER=$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$BRANCH_NAME" --json number --jq '.[0].number')
           echo "pr-number=${PR_NUMBER:-}" >> "$GITHUB_OUTPUT"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BRANCH_NAME: ${{ github.ref_name }}
       - name: Set empty output for non-push events
         if: github.event_name != 'push'
         run: echo "pr-number=" >> "$GITHUB_OUTPUT"
@@ -128,16 +129,16 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
           # Determine the branch to push to
-          if [ -n "${{ github.event.pull_request.head.ref }}" ]; then
+          if [ -n "$PR_HEAD_REF" ]; then
             # PR event - check if it's from the same repo
-            if [ "${{ github.event.pull_request.head.repo.full_name }}" != "${{ github.repository }}" ]; then
+            if [ "$PR_HEAD_REPO" != "$CURRENT_REPOSITORY" ]; then
               echo "PR is from a fork - cannot push automatic fixes"
               exit 0
             fi
-            BRANCH="${{ github.event.pull_request.head.ref }}"
+            BRANCH="$PR_HEAD_REF"
           else
             # Push event - use the current branch
-            BRANCH="${{ github.ref_name }}"
+            BRANCH="$GITHUB_REF_NAME"
           fi
 
           # Stage only the files modified by pre-commit
@@ -151,16 +152,21 @@ jobs:
 
           git commit -m "ci: apply pre-commit fixes"
           git push origin HEAD:"$BRANCH"
+        env:
+          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          CURRENT_REPOSITORY: ${{ github.repository }}
 
       - name: Check final status
         if: steps.first-pass.outputs.modified == 'true'
         run: |
-          EXIT_CODE="${{ steps.second-pass.outputs.exit_code }}"
-          if [ "$EXIT_CODE" != "0" ]; then
-            echo "Pre-commit validation failed: second execution returned exit code $EXIT_CODE"
-            exit $EXIT_CODE
+          if [ "$SECOND_PASS_EXIT_CODE" != "0" ]; then
+            echo "Pre-commit validation failed: second execution returned exit code $SECOND_PASS_EXIT_CODE"
+            exit "$SECOND_PASS_EXIT_CODE"
           fi
           echo "Pre-commit validation passed"
+        env:
+          SECOND_PASS_EXIT_CODE: ${{ steps.second-pass.outputs.exit_code }}
 
   vitest:
     name: Vitest Tests

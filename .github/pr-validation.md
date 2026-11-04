@@ -174,7 +174,25 @@ The workflow uses the following caches to speed up execution:
 - **Rust:** `Swatinem/rust-cache@v2` for Cargo dependencies — cache keys are OS-specific, so each platform (Linux, Windows, macOS) maintains its own cache
 - **Node.js:** `actions/setup-node@v4` with pnpm cache
 
-## Fork Pull Request Security
+## Security
+
+### Shell Injection Protection
+
+The workflow protects against shell injection attacks by never directly interpolating GitHub Actions expressions into shell commands. All user-controlled values (branch names, repository names, PR metadata) are passed as step-level environment variables instead:
+
+```yaml
+env:
+  PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+  PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+run: |
+  if [ -n "$PR_HEAD_REF" ]; then
+    # safe usage via quoted shell variable
+  fi
+```
+
+This prevents attackers from injecting shell metacharacters via malicious branch names or PR titles.
+
+### Fork Pull Request Security
 
 For PRs from forks:
 - Pre-commit hooks still run and report results
