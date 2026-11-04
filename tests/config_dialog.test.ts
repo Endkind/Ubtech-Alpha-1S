@@ -1,50 +1,6 @@
 import { describe, it, expect } from "vitest";
-import type { ConfigRepairReport, RecoveryEventType } from "../src/ts/schemas/config.ts";
-
-function resolveReportProperties(report: ConfigRepairReport | null, hasConflict: boolean) {
-  if (!report || hasConflict) {
-    return {
-      isOpen: false,
-      type: "info" as RecoveryEventType,
-      title: "",
-      description: "",
-    };
-  }
-
-  const hasFallback = report.repairs?.some((r) => r.repair_method === "default_fallback") || !!report.unrecoverable_error;
-
-  let type: RecoveryEventType = "info";
-  if (report.recovery_event?.event_type) {
-    type = report.recovery_event.event_type;
-  } else if (report.unrecoverable_error || hasFallback) {
-    type = "warning";
-  }
-
-  let title = "Konfigurationswerte automatisch konvertiert";
-  if (report.recovery_event?.title) {
-    title = report.recovery_event.title;
-  } else if (report.unrecoverable_error) {
-    title = "Konfiguration mit Standardwerten wiederhergestellt";
-  } else if (hasFallback) {
-    title = "Konfiguration teilweise repariert";
-  }
-
-  let description = "Einige Konfigurationswerte wurden automatisch in das erwartete Format umgewandelt.";
-  if (report.recovery_event?.description) {
-    description = report.recovery_event.description;
-  } else if (report.unrecoverable_error) {
-    description = "Die ursprüngliche Konfigurationsdatei konnte nicht geladen werden. Deshalb wurde eine neue Konfiguration mit den Standardwerten erstellt.";
-  } else if (hasFallback) {
-    description = "Einige Konfigurationswerte waren ungültig und wurden durch Standardwerte ersetzt.";
-  }
-
-  return {
-    isOpen: true,
-    type,
-    title,
-    description,
-  };
-}
+import { resolveReportProperties } from "../src/ts/utils/config_dialog.ts";
+import type { ConfigRepairReport } from "../src/ts/schemas/config.ts";
 
 describe("Config Report and Dialog Resolution", () => {
   it("Scenario 1: should resolve info event for pure type conversions", () => {

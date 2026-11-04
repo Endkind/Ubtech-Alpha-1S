@@ -12,7 +12,8 @@
   import Library from "@pages/Library.vue";
   import ConfigDialog from "./components/ConfigDialog.vue";
   import { usePagesStore } from "@stores/pages.ts";
-  import type { ConfigConflict, ResolutionChoice, ConfigRepairReport, RecoveryEventType } from "@ts/schemas/config.ts";
+  import type { ConfigConflict, ResolutionChoice, ConfigRepairReport } from "@ts/schemas/config.ts";
+  import { resolveReportProperties } from "@ts/utils/config_dialog.ts";
   import { CheckIcon } from "@heroicons/vue/24/outline";
 
   const pages_store = usePagesStore();
@@ -29,57 +30,9 @@
 
   const repair_report = ref<ConfigRepairReport | null>(null);
 
-  const hasFallback = computed(() => {
-    if (!repair_report.value) return false;
-    if (repair_report.value.unrecoverable_error) return true;
-    return repair_report.value.repairs?.some((r) => r.repair_method === "default_fallback");
-  });
-
-  const isRepairModalOpen = computed(() => {
-    return conflict.value === null && repair_report.value !== null;
-  });
-
-  const reportType = computed<RecoveryEventType>(() => {
-    if (!repair_report.value) return "info";
-    if (repair_report.value.recovery_event?.event_type) {
-      return repair_report.value.recovery_event.event_type;
-    }
-    if (repair_report.value.unrecoverable_error) {
-      return "warning";
-    }
-    if (hasFallback.value) {
-      return "warning";
-    }
-    return "info";
-  });
-
-  const reportTitle = computed(() => {
-    if (!repair_report.value) return "";
-    if (repair_report.value.recovery_event?.title) {
-      return repair_report.value.recovery_event.title;
-    }
-    if (repair_report.value.unrecoverable_error) {
-      return "Konfiguration mit Standardwerten wiederhergestellt";
-    }
-    if (hasFallback.value) {
-      return "Konfiguration teilweise repariert";
-    }
-    return "Konfigurationswerte automatisch konvertiert";
-  });
-
-  const reportDescription = computed(() => {
-    if (!repair_report.value) return "";
-    if (repair_report.value.recovery_event?.description) {
-      return repair_report.value.recovery_event.description;
-    }
-    if (repair_report.value.unrecoverable_error) {
-      return "Die ursprüngliche Konfigurationsdatei konnte nicht geladen werden. Deshalb wurde eine neue Konfiguration mit den Standardwerten erstellt.";
-    }
-    if (hasFallback.value) {
-      return "Einige Konfigurationswerte waren ungültig und wurden durch Standardwerte ersetzt.";
-    }
-    return "Einige Konfigurationswerte wurden automatisch in das erwartete Format umgewandelt.";
-  });
+  const reportProps = computed(() =>
+    resolveReportProperties(repair_report.value, conflict.value !== null)
+  );
 
   async function checkConflict() {
     try {
@@ -312,10 +265,10 @@
 
   <!-- Configuration Repair / Recovery Modal Dialog -->
   <ConfigDialog
-    :is-open="isRepairModalOpen"
-    :type="reportType"
-    :title="reportTitle"
-    :description="reportDescription"
+    :is-open="reportProps.isOpen"
+    :type="reportProps.type"
+    :title="reportProps.title"
+    :description="reportProps.description"
     @close="dismissRepairReport"
   >
     <div v-if="repair_report" class="space-y-3 my-2 text-xs">
