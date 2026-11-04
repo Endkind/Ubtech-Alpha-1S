@@ -924,13 +924,290 @@ pub async fn init_config_state<P: AsRef<Path>>(config_path: P) -> InitConfigResu
                 }
             }
             Err(e) => {
-                eprintln!(
-                    "Fehler beim Laden der Recovery-Datei {}: {}. Recovery-Datei wird entfernt.",
-                    recovery_path.display(),
-                    e
-                );
-                let _ = tokio::fs::remove_file(&recovery_path).await;
-                init_config_without_recovery(config_path, config_exists).await
+                match &e {
+                    LoadConfigError::Io(io_err) => {
+                        eprintln!(
+                            "IO-Fehler beim Laden der Recovery-Datei {}: {}. Recovery-Datei wird beibehalten.",
+                            recovery_path.display(),
+                            io_err
+                        );
+                        let event = RecoveryEvent {
+                            event_type: RecoveryEventType::Warning,
+                            title: "Recovery-Datei nicht lesbar".to_string(),
+                            description: "Die Recovery-Sicherungsdatei konnte wegen eines E/A-Fehlers nicht geladen werden. Die Datei bleibt erhalten für einen späteren Wiederherstellungsversuch.".to_string(),
+                            details: Some(RecoveryDetails {
+                                affected_file: Some(recovery_path.to_string_lossy().to_string()),
+                                error_cause: Some(io_err.to_string()),
+                                recovery_action: Some("Recovery-Datei beibehalten".to_string()),
+                                source: Some("Recovery-Sicherungsdatei".to_string()),
+                                result: Some("Hauptkonfiguration oder Standardwerte verwendet".to_string()),
+                            }),
+                        };
+                        if config_exists {
+                            match Config::load_and_repair_from_file_with_retry(config_path).await {
+                                Ok((config, report)) => {
+                                    if report.has_repairs() {
+                                        if let Err(save_err) = config.save_to_file(config_path).await {
+                                            eprintln!("Fehler beim Speichern der reparierten Konfiguration: {}", save_err);
+                                        }
+                                    }
+                                    InitConfigResult {
+                                        config,
+                                        is_recovery_mode: false,
+                                        conflict: None,
+                                        repair_report: if report.is_empty() { None } else { Some(report) },
+                                    }
+                                }
+                                Err(LoadConfigError::Io(config_io_err)) => {
+                                    eprintln!(
+                                        "Persistenter IO-Fehler beim Laden von {}: {}. Verwende Standardwerte.",
+                                        config_path.display(),
+                                        config_io_err
+                                    );
+                                    let default_config = Config::default();
+                                    InitConfigResult {
+                                        config: default_config,
+                                        is_recovery_mode: true,
+                                        conflict: None,
+                                        repair_report: Some(ConfigRepairReport {
+                                            repairs: vec![],
+                                            unrecoverable_error: Some(format!("Persistent IO error: {}", config_io_err)),
+                                            recovery_event: Some(event),
+                                        }),
+                                    }
+                                }
+                                Err(config_err) => {
+                                    eprintln!(
+                                        "Fehler beim Laden von {}: {}. Verwende Standardwerte.",
+                                        config_path.display(),
+                                        config_err
+                                    );
+                                    let default_config = Config::default();
+                                    InitConfigResult {
+                                        config: default_config,
+                                        is_recovery_mode: false,
+                                        conflict: None,
+                                        repair_report: Some(ConfigRepairReport {
+                                            repairs: vec![],
+                                            unrecoverable_error: Some(format!("Config error: {}", config_err)),
+                                            recovery_event: Some(event),
+                                        }),
+                                    }
+                                }
+                            }
+                        } else {
+                            let default_config = Config::default();
+                            InitConfigResult {
+                                config: default_config,
+                                is_recovery_mode: true,
+                                conflict: None,
+                                repair_report: Some(ConfigRepairReport {
+                                    repairs: vec![],
+                                    unrecoverable_error: Some(format!("IO error loading recovery file: {}", io_err)),
+                                    recovery_event: Some(event),
+                                }),
+                            }
+                        }
+                    }
+                    LoadConfigError::Parse(parse_err) => {
+                        eprintln!(
+                            "Parse-Fehler beim Laden der Recovery-Datei {}: {}. Recovery-Datei wird beibehalten für manuelle Wiederherstellung.",
+                            recovery_path.display(),
+                            parse_err
+                        );
+                        let event = RecoveryEvent {
+                            event_type: RecoveryEventType::Warning,
+                            title: "Recovery-Datei beschädigt".to_string(),
+                            description: "Die Recovery-Sicherungsdatei ist beschädigt und konnte nicht geparst werden. Die Datei bleibt erhalten für eine manuelle Wiederherstellung.".to_string(),
+                            details: Some(RecoveryDetails {
+                                affected_file: Some(recovery_path.to_string_lossy().to_string()),
+                                error_cause: Some(parse_err.to_string()),
+                                recovery_action: Some("Recovery-Datei beibehalten für manuelle Wiederherstellung".to_string()),
+                                source: Some("Recovery-Sicherungsdatei".to_string()),
+                                result: Some("Hauptkonfiguration oder Standardwerte verwendet".to_string()),
+                            }),
+                        };
+                        if config_exists {
+                            match Config::load_and_repair_from_file_with_retry(config_path).await {
+                                Ok((config, report)) => {
+                                    if report.has_repairs() {
+                                        if let Err(save_err) = config.save_to_file(config_path).await {
+                                            eprintln!("Fehler beim Speichern der reparierten Konfiguration: {}", save_err);
+                                        }
+                                    }
+                                    InitConfigResult {
+                                        config,
+                                        is_recovery_mode: false,
+                                        conflict: None,
+                                        repair_report: if report.is_empty() { None } else { Some(report) },
+                                    }
+                                }
+                                Err(config_err) => {
+                                    eprintln!(
+                                        "Fehler beim Laden von {}: {}. Verwende Standardwerte.",
+                                        config_path.display(),
+                                        config_err
+                                    );
+                                    let default_config = Config::default();
+                                    InitConfigResult {
+                                        config: default_config,
+                                        is_recovery_mode: false,
+                                        conflict: None,
+                                        repair_report: Some(ConfigRepairReport {
+                                            repairs: vec![],
+                                            unrecoverable_error: Some(format!("Config error: {}", config_err)),
+                                            recovery_event: Some(event),
+                                        }),
+                                    }
+                                }
+                            }
+                        } else {
+                            let default_config = Config::default();
+                            InitConfigResult {
+                                config: default_config,
+                                is_recovery_mode: true,
+                                conflict: None,
+                                repair_report: Some(ConfigRepairReport {
+                                    repairs: vec![],
+                                    unrecoverable_error: Some(format!("Parse error in recovery file: {}", parse_err)),
+                                    recovery_event: Some(event),
+                                }),
+                            }
+                        }
+                    }
+                    LoadConfigError::IncompatibleStructure(msg) => {
+                        eprintln!(
+                            "Inkompatible Struktur in Recovery-Datei {}: {}. Recovery-Datei wird beibehalten.",
+                            recovery_path.display(),
+                            msg
+                        );
+                        let event = RecoveryEvent {
+                            event_type: RecoveryEventType::Warning,
+                            title: "Recovery-Datei inkompatibel".to_string(),
+                            description: "Die Recovery-Sicherungsdatei hat eine inkompatible Struktur. Die Datei bleibt erhalten für eine manuelle Überprüfung.".to_string(),
+                            details: Some(RecoveryDetails {
+                                affected_file: Some(recovery_path.to_string_lossy().to_string()),
+                                error_cause: Some(msg.clone()),
+                                recovery_action: Some("Recovery-Datei beibehalten".to_string()),
+                                source: Some("Recovery-Sicherungsdatei".to_string()),
+                                result: Some("Hauptkonfiguration oder Standardwerte verwendet".to_string()),
+                            }),
+                        };
+                        if config_exists {
+                            match Config::load_and_repair_from_file_with_retry(config_path).await {
+                                Ok((config, report)) => {
+                                    if report.has_repairs() {
+                                        if let Err(save_err) = config.save_to_file(config_path).await {
+                                            eprintln!("Fehler beim Speichern der reparierten Konfiguration: {}", save_err);
+                                        }
+                                    }
+                                    InitConfigResult {
+                                        config,
+                                        is_recovery_mode: false,
+                                        conflict: None,
+                                        repair_report: if report.is_empty() { None } else { Some(report) },
+                                    }
+                                }
+                                Err(config_err) => {
+                                    eprintln!(
+                                        "Fehler beim Laden von {}: {}. Verwende Standardwerte.",
+                                        config_path.display(),
+                                        config_err
+                                    );
+                                    let default_config = Config::default();
+                                    InitConfigResult {
+                                        config: default_config,
+                                        is_recovery_mode: false,
+                                        conflict: None,
+                                        repair_report: Some(ConfigRepairReport {
+                                            repairs: vec![],
+                                            unrecoverable_error: Some(format!("Config error: {}", config_err)),
+                                            recovery_event: Some(event),
+                                        }),
+                                    }
+                                }
+                            }
+                        } else {
+                            let default_config = Config::default();
+                            InitConfigResult {
+                                config: default_config,
+                                is_recovery_mode: true,
+                                conflict: None,
+                                repair_report: Some(ConfigRepairReport {
+                                    repairs: vec![],
+                                    unrecoverable_error: Some(format!("Incompatible structure: {}", msg)),
+                                    recovery_event: Some(event),
+                                }),
+                            }
+                        }
+                    }
+                    LoadConfigError::Validation(validation_err) => {
+                        eprintln!(
+                            "Validierungsfehler in Recovery-Datei {}: {}. Recovery-Datei wird beibehalten.",
+                            recovery_path.display(),
+                            validation_err
+                        );
+                        let event = RecoveryEvent {
+                            event_type: RecoveryEventType::Warning,
+                            title: "Recovery-Datei ungültig".to_string(),
+                            description: "Die Recovery-Sicherungsdatei enthält ungültige Werte. Die Datei bleibt erhalten für eine manuelle Korrektur.".to_string(),
+                            details: Some(RecoveryDetails {
+                                affected_file: Some(recovery_path.to_string_lossy().to_string()),
+                                error_cause: Some(validation_err.to_string()),
+                                recovery_action: Some("Recovery-Datei beibehalten".to_string()),
+                                source: Some("Recovery-Sicherungsdatei".to_string()),
+                                result: Some("Hauptkonfiguration oder Standardwerte verwendet".to_string()),
+                            }),
+                        };
+                        if config_exists {
+                            match Config::load_and_repair_from_file_with_retry(config_path).await {
+                                Ok((config, report)) => {
+                                    if report.has_repairs() {
+                                        if let Err(save_err) = config.save_to_file(config_path).await {
+                                            eprintln!("Fehler beim Speichern der reparierten Konfiguration: {}", save_err);
+                                        }
+                                    }
+                                    InitConfigResult {
+                                        config,
+                                        is_recovery_mode: false,
+                                        conflict: None,
+                                        repair_report: if report.is_empty() { None } else { Some(report) },
+                                    }
+                                }
+                                Err(config_err) => {
+                                    eprintln!(
+                                        "Fehler beim Laden von {}: {}. Verwende Standardwerte.",
+                                        config_path.display(),
+                                        config_err
+                                    );
+                                    let default_config = Config::default();
+                                    InitConfigResult {
+                                        config: default_config,
+                                        is_recovery_mode: false,
+                                        conflict: None,
+                                        repair_report: Some(ConfigRepairReport {
+                                            repairs: vec![],
+                                            unrecoverable_error: Some(format!("Config error: {}", config_err)),
+                                            recovery_event: Some(event),
+                                        }),
+                                    }
+                                }
+                            }
+                        } else {
+                            let default_config = Config::default();
+                            InitConfigResult {
+                                config: default_config,
+                                is_recovery_mode: true,
+                                conflict: None,
+                                repair_report: Some(ConfigRepairReport {
+                                    repairs: vec![],
+                                    unrecoverable_error: Some(format!("Validation error: {}", validation_err)),
+                                    recovery_event: Some(event),
+                                }),
+                            }
+                        }
+                    }
+                }
             }
         }
     } else {
