@@ -41,9 +41,12 @@
     }
   );
 
-  function handleCancel() {
-    if (props.required) return;
-    emit('close');
+  function handleCancel(event: Event) {
+    if (props.required) {
+      event.preventDefault();
+      return;
+    }
+    emit("close");
   }
 
   function handleClose() {
