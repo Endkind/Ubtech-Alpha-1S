@@ -1,5 +1,5 @@
 <script setup lang="ts">
-  import { computed } from "vue";
+  import { computed, useTemplateRef, watch } from "vue";
   import type { RecoveryEventType } from "@ts/schemas/config.ts";
   import {
     InformationCircleIcon,
@@ -22,9 +22,30 @@
     }
   );
 
-  defineEmits<{
+  const emit = defineEmits<{
     (e: "close"): void;
   }>();
+
+  const dialog = useTemplateRef<HTMLDialogElement>('config-dialog');
+
+  watch(
+    () => props.isOpen,
+    (open) => {
+      if (open) {
+        dialog.value?.showModal();
+      } else {
+        dialog.value?.close();
+      }
+    }
+  );
+
+  function handleCancel() {
+    emit('close');
+  }
+
+  function handleClose() {
+    emit('close');
+  }
 
   const iconComponent = computed(() => {
     switch (props.type) {
@@ -70,7 +91,12 @@
 </script>
 
 <template>
-  <dialog class="modal z-50" :class="{ 'modal-open': isOpen }">
+  <dialog
+    ref="config-dialog"
+    class="modal z-50"
+    @cancel="handleCancel"
+    @close="handleClose"
+  >
     <div class="modal-box max-w-3xl border shadow-2xl relative bg-base-100" :class="borderClass">
       <!-- Close button (top right) -->
       <button

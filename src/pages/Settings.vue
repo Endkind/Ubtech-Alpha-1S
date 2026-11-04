@@ -34,6 +34,7 @@
   const save_success = ref<boolean>(false);
   const is_saving = ref<boolean>(false);
 
+  const resetDialog = useTemplateRef<HTMLDialogElement>('reset-dialog');
   const is_reset_modal_open = ref<boolean>(false);
   const is_resetting = ref<boolean>(false);
   const reset_success = ref<boolean>(false);
@@ -166,11 +167,27 @@
 
   function openResetModal() {
     is_reset_modal_open.value = true;
+    resetDialog.value?.showModal();
   }
 
   function closeResetModal() {
     if (is_resetting.value) return;
     is_reset_modal_open.value = false;
+    resetDialog.value?.close();
+  }
+
+  function handleResetDialogCancel() {
+    if (is_resetting.value) {
+      resetDialog.value?.showModal();
+      return;
+    }
+    is_reset_modal_open.value = false;
+  }
+
+  function handleResetDialogClose() {
+    if (!is_resetting.value) {
+      is_reset_modal_open.value = false;
+    }
   }
 
   async function confirmReset() {
@@ -185,6 +202,7 @@
       workdir.value = settings.workdir;
       venv.value = settings.venv;
 
+      resetDialog.value?.close();
       is_reset_modal_open.value = false;
       reset_success.value = true;
       setTimeout(() => {
@@ -497,7 +515,12 @@
     </div>
 
     <!-- Reset Confirmation Modal -->
-    <dialog class="modal" :class="{ 'modal-open': is_reset_modal_open }">
+    <dialog
+      ref="reset-dialog"
+      class="modal"
+      @cancel="handleResetDialogCancel"
+      @close="handleResetDialogClose"
+    >
       <div class="modal-box">
         <h3 class="text-lg font-bold flex items-center gap-2 text-error">
           <ExclamationTriangleIcon class="size-6" />
@@ -527,8 +550,8 @@
           </button>
         </div>
       </div>
-      <form method="dialog" class="modal-backdrop" @submit.prevent="closeResetModal">
-        <button type="button" @click="closeResetModal">Schließen</button>
+      <form method="dialog" class="modal-backdrop">
+        <button type="submit">Schließen</button>
       </form>
     </dialog>
   </div>
