@@ -1,8 +1,9 @@
-use std::sync::LazyLock;
 use regex::Regex;
+use std::sync::LazyLock;
 
 pub static MAC_ADDRESS: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^(([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}|([0-9A-Fa-f]{2}-){5}[0-9A-Fa-f]{2})$").unwrap()
+    Regex::new(r"^(([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}|([0-9A-Fa-f]{2}-){5}[0-9A-Fa-f]{2})$")
+        .unwrap()
 });
 
 #[cfg(test)]

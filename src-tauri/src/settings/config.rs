@@ -1,9 +1,9 @@
+use crate::validator::regex::MAC_ADDRESS as MAC_ADDRESS_REGEX;
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use serde::{Deserialize, Serialize};
 use tokio::io::AsyncWriteExt;
 use validator::Validate;
-use crate::validator::regex::MAC_ADDRESS as MAC_ADDRESS_REGEX;
 
 static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -90,9 +90,18 @@ impl ConfigRepairReport {
     }
 
     pub fn has_fallback(&self) -> bool {
-        self.repairs.iter().any(|r| r.repair_method == RepairMethod::DefaultFallback)
+        self.repairs
+            .iter()
+            .any(|r| r.repair_method == RepairMethod::DefaultFallback)
             || self.unrecoverable_error.is_some()
-            || self.recovery_event.as_ref().map(|e| e.event_type == RecoveryEventType::Warning || e.event_type == RecoveryEventType::Error).unwrap_or(false)
+            || self
+                .recovery_event
+                .as_ref()
+                .map(|e| {
+                    e.event_type == RecoveryEventType::Warning
+                        || e.event_type == RecoveryEventType::Error
+                })
+                .unwrap_or(false)
     }
 
     pub fn has_repairs(&self) -> bool {
@@ -146,10 +155,18 @@ pub struct Config {
     #[validate(regex(path = *MAC_ADDRESS_REGEX, message = "Bitte eine gültige MAC-Adresse eingeben (z. B. 00:11:22:33:44:55 oder 00-11-22-33-44-55)"))]
     pub mac_address: String,
 
-    #[validate(range(min = 0, max = 2000, message = "Standard-Delay muss zwischen 0 und 2000 ms liegen"))]
+    #[validate(range(
+        min = 0,
+        max = 2000,
+        message = "Standard-Delay muss zwischen 0 und 2000 ms liegen"
+    ))]
     pub default_delay: usize,
 
-    #[validate(range(min = 10, max = 200, message = "Standarddauer für Aktionen muss zwischen 10 und 200 ms liegen"))]
+    #[validate(range(
+        min = 10,
+        max = 200,
+        message = "Standarddauer für Aktionen muss zwischen 10 und 200 ms liegen"
+    ))]
     pub default_action_duration: usize,
 
     pub python_sdk: String,
@@ -166,9 +183,7 @@ fn toml_to_json(val: &toml::Value) -> serde_json::Value {
             .unwrap_or(serde_json::Value::Null),
         toml::Value::Boolean(b) => serde_json::Value::Bool(*b),
         toml::Value::Datetime(d) => serde_json::Value::String(d.to_string()),
-        toml::Value::Array(arr) => {
-            serde_json::Value::Array(arr.iter().map(toml_to_json).collect())
-        }
+        toml::Value::Array(arr) => serde_json::Value::Array(arr.iter().map(toml_to_json).collect()),
         toml::Value::Table(t) => {
             let mut map = serde_json::Map::new();
             for (k, v) in t {
@@ -252,48 +267,51 @@ where
             }
         }
         Some(toml::Value::String(s)) => {
-            let parse_res = if s.starts_with('-') || s.parse::<i64>().map(|v| v < 0).unwrap_or(false) {
-                Err("Negative value for unsigned integer".to_string())
-            } else if s.parse::<f64>().is_ok() && s.contains('.') {
-                Err("Cannot convert floating-point string to integer without loss".to_string())
-            } else if s.parse::<u128>().map(|v| v > usize::MAX as u128).unwrap_or(false) {
-                Err("Numeric overflow".to_string())
-            } else {
-                match s.parse::<usize>() {
-                    Ok(val) => Ok(val),
-                    Err(_) => Err("Cannot convert string to unsigned integer".to_string()),
-                }
-            };
+            let parse_res =
+                if s.starts_with('-') || s.parse::<i64>().map(|v| v < 0).unwrap_or(false) {
+                    Err("Negative value for unsigned integer".to_string())
+                } else if s.parse::<f64>().is_ok() && s.contains('.') {
+                    Err("Cannot convert floating-point string to integer without loss".to_string())
+                } else if s
+                    .parse::<u128>()
+                    .map(|v| v > usize::MAX as u128)
+                    .unwrap_or(false)
+                {
+                    Err("Numeric overflow".to_string())
+                } else {
+                    match s.parse::<usize>() {
+                        Ok(val) => Ok(val),
+                        Err(_) => Err("Cannot convert string to unsigned integer".to_string()),
+                    }
+                };
 
             match parse_res {
-                Ok(val) => {
-                    match validate(val) {
-                        Ok(_) => {
-                            repairs.push(FieldRepair {
-                                field: field_name.to_string(),
-                                original_value: serde_json::json!(s),
-                                expected_type: "usize".to_string(),
-                                reason: "Converted string to unsigned integer".to_string(),
-                                resulting_value: serde_json::json!(val),
-                                repair_method: RepairMethod::Converted,
-                                success: true,
-                            });
-                            val
-                        }
-                        Err(err_msg) => {
-                            repairs.push(FieldRepair {
-                                field: field_name.to_string(),
-                                original_value: serde_json::json!(s),
-                                expected_type: "usize".to_string(),
-                                reason: err_msg,
-                                resulting_value: serde_json::json!(default_val),
-                                repair_method: RepairMethod::DefaultFallback,
-                                success: false,
-                            });
-                            default_val
-                        }
+                Ok(val) => match validate(val) {
+                    Ok(_) => {
+                        repairs.push(FieldRepair {
+                            field: field_name.to_string(),
+                            original_value: serde_json::json!(s),
+                            expected_type: "usize".to_string(),
+                            reason: "Converted string to unsigned integer".to_string(),
+                            resulting_value: serde_json::json!(val),
+                            repair_method: RepairMethod::Converted,
+                            success: true,
+                        });
+                        val
                     }
-                }
+                    Err(err_msg) => {
+                        repairs.push(FieldRepair {
+                            field: field_name.to_string(),
+                            original_value: serde_json::json!(s),
+                            expected_type: "usize".to_string(),
+                            reason: err_msg,
+                            resulting_value: serde_json::json!(default_val),
+                            repair_method: RepairMethod::DefaultFallback,
+                            success: false,
+                        });
+                        default_val
+                    }
+                },
                 Err(err_msg) => {
                     repairs.push(FieldRepair {
                         field: field_name.to_string(),
@@ -354,23 +372,21 @@ where
             });
             default_val.to_string()
         }
-        Some(toml::Value::String(s)) => {
-            match validate(s) {
-                Ok(_) => s.clone(),
-                Err(err_msg) => {
-                    repairs.push(FieldRepair {
-                        field: field_name.to_string(),
-                        original_value: serde_json::json!(s),
-                        expected_type: "String".to_string(),
-                        reason: err_msg,
-                        resulting_value: serde_json::json!(default_val),
-                        repair_method: RepairMethod::DefaultFallback,
-                        success: false,
-                    });
-                    default_val.to_string()
-                }
+        Some(toml::Value::String(s)) => match validate(s) {
+            Ok(_) => s.clone(),
+            Err(err_msg) => {
+                repairs.push(FieldRepair {
+                    field: field_name.to_string(),
+                    original_value: serde_json::json!(s),
+                    expected_type: "String".to_string(),
+                    reason: err_msg,
+                    resulting_value: serde_json::json!(default_val),
+                    repair_method: RepairMethod::DefaultFallback,
+                    success: false,
+                });
+                default_val.to_string()
             }
-        }
+        },
         Some(toml::Value::Integer(i)) => {
             let converted = i.to_string();
             match validate(&converted) {
@@ -622,15 +638,20 @@ impl Config {
         max_retries: usize,
         retry_delay: std::time::Duration,
     ) -> Result<Self, LoadConfigError> {
-        let (config, _) = Self::load_and_repair_from_file_with_retry_opts(path, max_retries, retry_delay).await?;
+        let (config, _) =
+            Self::load_and_repair_from_file_with_retry_opts(path, max_retries, retry_delay).await?;
         Ok(config)
     }
 
-    pub async fn load_from_file_with_retry<P: AsRef<Path>>(path: P) -> Result<Self, LoadConfigError> {
+    pub async fn load_from_file_with_retry<P: AsRef<Path>>(
+        path: P,
+    ) -> Result<Self, LoadConfigError> {
         Self::load_from_file_with_retry_opts(path, MAX_IO_RETRIES, IO_RETRY_DELAY).await
     }
 
-    pub async fn load_from_file<P: AsRef<Path>>(path: P) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn load_from_file<P: AsRef<Path>>(
+        path: P,
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         match Self::load_from_file_with_retry(path).await {
             Ok(config) => Ok(config),
             Err(LoadConfigError::Io(e)) => Err(Box::new(e)),
@@ -640,7 +661,10 @@ impl Config {
         }
     }
 
-    pub async fn save_to_file<P: AsRef<Path>>(&self, path: P) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn save_to_file<P: AsRef<Path>>(
+        &self,
+        path: P,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         self.validate()?;
         let path = path.as_ref();
         let parent = path
@@ -725,7 +749,10 @@ pub async fn init_config_state<P: AsRef<Path>>(config_path: P) -> InitConfigResu
                                             let _ = tokio::fs::remove_file(&recovery_path).await;
                                         }
                                         Err(save_err) => {
-                                            eprintln!("Fehler beim Speichern der reparierten Konfiguration: {}", save_err);
+                                            eprintln!(
+                                                "Fehler beim Speichern der reparierten Konfiguration: {}",
+                                                save_err
+                                            );
                                             let save_event = RecoveryEvent {
                                                 event_type: RecoveryEventType::Error,
                                                 title: "Speichern der reparierten Konfiguration fehlgeschlagen".to_string(),
@@ -744,7 +771,10 @@ pub async fn init_config_state<P: AsRef<Path>>(config_path: P) -> InitConfigResu
                                                 conflict: None,
                                                 repair_report: Some(ConfigRepairReport {
                                                     repairs: orig_report.repairs,
-                                                    unrecoverable_error: Some(format!("Save error: {}", save_err)),
+                                                    unrecoverable_error: Some(format!(
+                                                        "Save error: {}",
+                                                        save_err
+                                                    )),
                                                     recovery_event: Some(save_event),
                                                 }),
                                             };
@@ -757,7 +787,11 @@ pub async fn init_config_state<P: AsRef<Path>>(config_path: P) -> InitConfigResu
                                     config: orig_cfg,
                                     is_recovery_mode: false,
                                     conflict: None,
-                                    repair_report: if orig_report.is_empty() { None } else { Some(orig_report) },
+                                    repair_report: if orig_report.is_empty() {
+                                        None
+                                    } else {
+                                        Some(orig_report)
+                                    },
                                 }
                             } else {
                                 // Differ: genuine conflict
@@ -768,7 +802,11 @@ pub async fn init_config_state<P: AsRef<Path>>(config_path: P) -> InitConfigResu
                                         original: orig_cfg,
                                         recovery: rec_cfg,
                                     }),
-                                    repair_report: if orig_report.is_empty() { None } else { Some(orig_report) },
+                                    repair_report: if orig_report.is_empty() {
+                                        None
+                                    } else {
+                                        Some(orig_report)
+                                    },
                                 }
                             }
                         }
@@ -945,15 +983,14 @@ pub async fn init_config_state<P: AsRef<Path>>(config_path: P) -> InitConfigResu
                     }
                 }
             }
-            Err(e) => {
-                match &e {
-                    LoadConfigError::Io(io_err) => {
-                        eprintln!(
-                            "IO-Fehler beim Laden der Recovery-Datei {}: {}. Recovery-Datei wird beibehalten.",
-                            recovery_path.display(),
-                            io_err
-                        );
-                        let event = RecoveryEvent {
+            Err(e) => match &e {
+                LoadConfigError::Io(io_err) => {
+                    eprintln!(
+                        "IO-Fehler beim Laden der Recovery-Datei {}: {}. Recovery-Datei wird beibehalten.",
+                        recovery_path.display(),
+                        io_err
+                    );
+                    let event = RecoveryEvent {
                             event_type: RecoveryEventType::Warning,
                             title: "Recovery-Datei nicht lesbar".to_string(),
                             description: "Die Recovery-Sicherungsdatei konnte wegen eines E/A-Fehlers nicht geladen werden. Die Datei bleibt erhalten für einen späteren Wiederherstellungsversuch.".to_string(),
@@ -965,13 +1002,16 @@ pub async fn init_config_state<P: AsRef<Path>>(config_path: P) -> InitConfigResu
                                 result: Some("Hauptkonfiguration oder Standardwerte verwendet".to_string()),
                             }),
                         };
-                        if config_exists {
-                            match Config::load_and_repair_from_file_with_retry(config_path).await {
-                                Ok((config, report)) => {
-                                    if report.has_repairs() {
-                                        if let Err(save_err) = config.save_to_file(config_path).await {
-                                            eprintln!("Fehler beim Speichern der reparierten Konfiguration: {}", save_err);
-                                            let save_event = RecoveryEvent {
+                    if config_exists {
+                        match Config::load_and_repair_from_file_with_retry(config_path).await {
+                            Ok((config, report)) => {
+                                if report.has_repairs() {
+                                    if let Err(save_err) = config.save_to_file(config_path).await {
+                                        eprintln!(
+                                            "Fehler beim Speichern der reparierten Konfiguration: {}",
+                                            save_err
+                                        );
+                                        let save_event = RecoveryEvent {
                                                 event_type: RecoveryEventType::Error,
                                                 title: "Speichern der reparierten Konfiguration fehlgeschlagen".to_string(),
                                                 description: "Die Konfiguration wurde erfolgreich repariert, konnte aber nicht gespeichert werden. Die ursprüngliche Datei bleibt unverändert und wird beim nächsten Start erneut repariert.".to_string(),
@@ -983,90 +1023,110 @@ pub async fn init_config_state<P: AsRef<Path>>(config_path: P) -> InitConfigResu
                                                     result: Some("Reparatur nicht persistent, wiederholt sich beim Neustart".to_string()),
                                                 }),
                                             };
-                                            return InitConfigResult {
-                                                config,
-                                                is_recovery_mode: true,
-                                                conflict: None,
-                                                repair_report: Some(ConfigRepairReport {
-                                                    repairs: report.repairs,
-                                                    unrecoverable_error: Some(format!("Save error: {}", save_err)),
-                                                    recovery_event: Some(save_event),
-                                                }),
-                                            };
-                                        }
-                                    } else {
                                         return InitConfigResult {
                                             config,
-                                            is_recovery_mode: false,
+                                            is_recovery_mode: true,
                                             conflict: None,
-                                            repair_report: if report.is_empty() { None } else { Some(report) },
+                                            repair_report: Some(ConfigRepairReport {
+                                                repairs: report.repairs,
+                                                unrecoverable_error: Some(format!(
+                                                    "Save error: {}",
+                                                    save_err
+                                                )),
+                                                recovery_event: Some(save_event),
+                                            }),
                                         };
                                     }
-                                    InitConfigResult {
+                                } else {
+                                    return InitConfigResult {
                                         config,
                                         is_recovery_mode: false,
                                         conflict: None,
-                                        repair_report: if report.is_empty() { None } else { Some(report) },
-                                    }
+                                        repair_report: if report.is_empty() {
+                                            None
+                                        } else {
+                                            Some(report)
+                                        },
+                                    };
                                 }
-                                Err(LoadConfigError::Io(config_io_err)) => {
-                                    eprintln!(
-                                        "Persistenter IO-Fehler beim Laden von {}: {}. Verwende Standardwerte.",
-                                        config_path.display(),
-                                        config_io_err
-                                    );
-                                    let default_config = Config::default();
-                                    InitConfigResult {
-                                        config: default_config,
-                                        is_recovery_mode: true,
-                                        conflict: None,
-                                        repair_report: Some(ConfigRepairReport {
-                                            repairs: vec![],
-                                            unrecoverable_error: Some(format!("Persistent IO error: {}", config_io_err)),
-                                            recovery_event: Some(event),
-                                        }),
-                                    }
-                                }
-                                Err(config_err) => {
-                                    eprintln!(
-                                        "Fehler beim Laden von {}: {}. Verwende Standardwerte.",
-                                        config_path.display(),
-                                        config_err
-                                    );
-                                    let default_config = Config::default();
-                                    InitConfigResult {
-                                        config: default_config,
-                                        is_recovery_mode: false,
-                                        conflict: None,
-                                        repair_report: Some(ConfigRepairReport {
-                                            repairs: vec![],
-                                            unrecoverable_error: Some(format!("Config error: {}", config_err)),
-                                            recovery_event: Some(event),
-                                        }),
-                                    }
+                                InitConfigResult {
+                                    config,
+                                    is_recovery_mode: false,
+                                    conflict: None,
+                                    repair_report: if report.is_empty() {
+                                        None
+                                    } else {
+                                        Some(report)
+                                    },
                                 }
                             }
-                        } else {
-                            let default_config = Config::default();
-                            InitConfigResult {
-                                config: default_config,
-                                is_recovery_mode: true,
-                                conflict: None,
-                                repair_report: Some(ConfigRepairReport {
-                                    repairs: vec![],
-                                    unrecoverable_error: Some(format!("IO error loading recovery file: {}", io_err)),
-                                    recovery_event: Some(event),
-                                }),
+                            Err(LoadConfigError::Io(config_io_err)) => {
+                                eprintln!(
+                                    "Persistenter IO-Fehler beim Laden von {}: {}. Verwende Standardwerte.",
+                                    config_path.display(),
+                                    config_io_err
+                                );
+                                let default_config = Config::default();
+                                InitConfigResult {
+                                    config: default_config,
+                                    is_recovery_mode: true,
+                                    conflict: None,
+                                    repair_report: Some(ConfigRepairReport {
+                                        repairs: vec![],
+                                        unrecoverable_error: Some(format!(
+                                            "Persistent IO error: {}",
+                                            config_io_err
+                                        )),
+                                        recovery_event: Some(event),
+                                    }),
+                                }
+                            }
+                            Err(config_err) => {
+                                eprintln!(
+                                    "Fehler beim Laden von {}: {}. Verwende Standardwerte.",
+                                    config_path.display(),
+                                    config_err
+                                );
+                                let default_config = Config::default();
+                                InitConfigResult {
+                                    config: default_config,
+                                    is_recovery_mode: false,
+                                    conflict: None,
+                                    repair_report: Some(ConfigRepairReport {
+                                        repairs: vec![],
+                                        unrecoverable_error: Some(format!(
+                                            "Config error: {}",
+                                            config_err
+                                        )),
+                                        recovery_event: Some(event),
+                                    }),
+                                }
                             }
                         }
+                    } else {
+                        let default_config = Config::default();
+                        InitConfigResult {
+                            config: default_config,
+                            is_recovery_mode: true,
+                            conflict: None,
+                            repair_report: Some(ConfigRepairReport {
+                                repairs: vec![],
+                                unrecoverable_error: Some(format!(
+                                    "IO error loading recovery file: {}",
+                                    io_err
+                                )),
+                                recovery_event: Some(event),
+                            }),
+                        }
                     }
-                    LoadConfigError::Parse(parse_err) => {
-                        eprintln!(
-                            "Parse-Fehler beim Laden der Recovery-Datei {}: {}. Recovery-Datei wird beibehalten für manuelle Wiederherstellung.",
-                            recovery_path.display(),
-                            parse_err
-                        );
-                        let event = RecoveryEvent {
+                }
+                LoadConfigError::Parse(parse_err) => {
+                    eprintln!(
+                        "Parse-Fehler beim Laden der Recovery-Datei {}: {}. Recovery-Datei wird beibehalten für manuelle Wiederherstellung.",
+                        recovery_path.display(),
+                        parse_err
+                    );
+                    let event = RecoveryEvent {
                             event_type: RecoveryEventType::Warning,
                             title: "Recovery-Datei beschädigt".to_string(),
                             description: "Die Recovery-Sicherungsdatei ist beschädigt und konnte nicht geparst werden. Die Datei bleibt erhalten für eine manuelle Wiederherstellung.".to_string(),
@@ -1078,13 +1138,16 @@ pub async fn init_config_state<P: AsRef<Path>>(config_path: P) -> InitConfigResu
                                 result: Some("Hauptkonfiguration oder Standardwerte verwendet".to_string()),
                             }),
                         };
-                        if config_exists {
-                            match Config::load_and_repair_from_file_with_retry(config_path).await {
-                                Ok((config, report)) => {
-                                    if report.has_repairs() {
-                                        if let Err(save_err) = config.save_to_file(config_path).await {
-                                            eprintln!("Fehler beim Speichern der reparierten Konfiguration: {}", save_err);
-                                            let save_event = RecoveryEvent {
+                    if config_exists {
+                        match Config::load_and_repair_from_file_with_retry(config_path).await {
+                            Ok((config, report)) => {
+                                if report.has_repairs() {
+                                    if let Err(save_err) = config.save_to_file(config_path).await {
+                                        eprintln!(
+                                            "Fehler beim Speichern der reparierten Konfiguration: {}",
+                                            save_err
+                                        );
+                                        let save_event = RecoveryEvent {
                                                 event_type: RecoveryEventType::Error,
                                                 title: "Speichern der reparierten Konfiguration fehlgeschlagen".to_string(),
                                                 description: "Die Konfiguration wurde erfolgreich repariert, konnte aber nicht gespeichert werden. Die ursprüngliche Datei bleibt unverändert und wird beim nächsten Start erneut repariert.".to_string(),
@@ -1096,72 +1159,89 @@ pub async fn init_config_state<P: AsRef<Path>>(config_path: P) -> InitConfigResu
                                                     result: Some("Reparatur nicht persistent, wiederholt sich beim Neustart".to_string()),
                                                 }),
                                             };
-                                            return InitConfigResult {
-                                                config,
-                                                is_recovery_mode: true,
-                                                conflict: None,
-                                                repair_report: Some(ConfigRepairReport {
-                                                    repairs: report.repairs,
-                                                    unrecoverable_error: Some(format!("Save error: {}", save_err)),
-                                                    recovery_event: Some(save_event),
-                                                }),
-                                            };
-                                        }
-                                    } else {
                                         return InitConfigResult {
                                             config,
-                                            is_recovery_mode: false,
+                                            is_recovery_mode: true,
                                             conflict: None,
-                                            repair_report: if report.is_empty() { None } else { Some(report) },
+                                            repair_report: Some(ConfigRepairReport {
+                                                repairs: report.repairs,
+                                                unrecoverable_error: Some(format!(
+                                                    "Save error: {}",
+                                                    save_err
+                                                )),
+                                                recovery_event: Some(save_event),
+                                            }),
                                         };
                                     }
-                                    InitConfigResult {
+                                } else {
+                                    return InitConfigResult {
                                         config,
                                         is_recovery_mode: false,
                                         conflict: None,
-                                        repair_report: if report.is_empty() { None } else { Some(report) },
-                                    }
+                                        repair_report: if report.is_empty() {
+                                            None
+                                        } else {
+                                            Some(report)
+                                        },
+                                    };
                                 }
-                                Err(config_err) => {
-                                    eprintln!(
-                                        "Fehler beim Laden von {}: {}. Verwende Standardwerte.",
-                                        config_path.display(),
-                                        config_err
-                                    );
-                                    let default_config = Config::default();
-                                    InitConfigResult {
-                                        config: default_config,
-                                        is_recovery_mode: false,
-                                        conflict: None,
-                                        repair_report: Some(ConfigRepairReport {
-                                            repairs: vec![],
-                                            unrecoverable_error: Some(format!("Config error: {}", config_err)),
-                                            recovery_event: Some(event),
-                                        }),
-                                    }
+                                InitConfigResult {
+                                    config,
+                                    is_recovery_mode: false,
+                                    conflict: None,
+                                    repair_report: if report.is_empty() {
+                                        None
+                                    } else {
+                                        Some(report)
+                                    },
                                 }
                             }
-                        } else {
-                            let default_config = Config::default();
-                            InitConfigResult {
-                                config: default_config,
-                                is_recovery_mode: true,
-                                conflict: None,
-                                repair_report: Some(ConfigRepairReport {
-                                    repairs: vec![],
-                                    unrecoverable_error: Some(format!("Parse error in recovery file: {}", parse_err)),
-                                    recovery_event: Some(event),
-                                }),
+                            Err(config_err) => {
+                                eprintln!(
+                                    "Fehler beim Laden von {}: {}. Verwende Standardwerte.",
+                                    config_path.display(),
+                                    config_err
+                                );
+                                let default_config = Config::default();
+                                InitConfigResult {
+                                    config: default_config,
+                                    is_recovery_mode: false,
+                                    conflict: None,
+                                    repair_report: Some(ConfigRepairReport {
+                                        repairs: vec![],
+                                        unrecoverable_error: Some(format!(
+                                            "Config error: {}",
+                                            config_err
+                                        )),
+                                        recovery_event: Some(event),
+                                    }),
+                                }
                             }
                         }
+                    } else {
+                        let default_config = Config::default();
+                        InitConfigResult {
+                            config: default_config,
+                            is_recovery_mode: true,
+                            conflict: None,
+                            repair_report: Some(ConfigRepairReport {
+                                repairs: vec![],
+                                unrecoverable_error: Some(format!(
+                                    "Parse error in recovery file: {}",
+                                    parse_err
+                                )),
+                                recovery_event: Some(event),
+                            }),
+                        }
                     }
-                    LoadConfigError::IncompatibleStructure(msg) => {
-                        eprintln!(
-                            "Inkompatible Struktur in Recovery-Datei {}: {}. Recovery-Datei wird beibehalten.",
-                            recovery_path.display(),
-                            msg
-                        );
-                        let event = RecoveryEvent {
+                }
+                LoadConfigError::IncompatibleStructure(msg) => {
+                    eprintln!(
+                        "Inkompatible Struktur in Recovery-Datei {}: {}. Recovery-Datei wird beibehalten.",
+                        recovery_path.display(),
+                        msg
+                    );
+                    let event = RecoveryEvent {
                             event_type: RecoveryEventType::Warning,
                             title: "Recovery-Datei inkompatibel".to_string(),
                             description: "Die Recovery-Sicherungsdatei hat eine inkompatible Struktur. Die Datei bleibt erhalten für eine manuelle Überprüfung.".to_string(),
@@ -1173,13 +1253,16 @@ pub async fn init_config_state<P: AsRef<Path>>(config_path: P) -> InitConfigResu
                                 result: Some("Hauptkonfiguration oder Standardwerte verwendet".to_string()),
                             }),
                         };
-                        if config_exists {
-                            match Config::load_and_repair_from_file_with_retry(config_path).await {
-                                Ok((config, report)) => {
-                                    if report.has_repairs() {
-                                        if let Err(save_err) = config.save_to_file(config_path).await {
-                                            eprintln!("Fehler beim Speichern der reparierten Konfiguration: {}", save_err);
-                                            let save_event = RecoveryEvent {
+                    if config_exists {
+                        match Config::load_and_repair_from_file_with_retry(config_path).await {
+                            Ok((config, report)) => {
+                                if report.has_repairs() {
+                                    if let Err(save_err) = config.save_to_file(config_path).await {
+                                        eprintln!(
+                                            "Fehler beim Speichern der reparierten Konfiguration: {}",
+                                            save_err
+                                        );
+                                        let save_event = RecoveryEvent {
                                                 event_type: RecoveryEventType::Error,
                                                 title: "Speichern der reparierten Konfiguration fehlgeschlagen".to_string(),
                                                 description: "Die Konfiguration wurde erfolgreich repariert, konnte aber nicht gespeichert werden. Die ursprüngliche Datei bleibt unverändert und wird beim nächsten Start erneut repariert.".to_string(),
@@ -1191,72 +1274,89 @@ pub async fn init_config_state<P: AsRef<Path>>(config_path: P) -> InitConfigResu
                                                     result: Some("Reparatur nicht persistent, wiederholt sich beim Neustart".to_string()),
                                                 }),
                                             };
-                                            return InitConfigResult {
-                                                config,
-                                                is_recovery_mode: true,
-                                                conflict: None,
-                                                repair_report: Some(ConfigRepairReport {
-                                                    repairs: report.repairs,
-                                                    unrecoverable_error: Some(format!("Save error: {}", save_err)),
-                                                    recovery_event: Some(save_event),
-                                                }),
-                                            };
-                                        }
-                                    } else {
                                         return InitConfigResult {
                                             config,
-                                            is_recovery_mode: false,
+                                            is_recovery_mode: true,
                                             conflict: None,
-                                            repair_report: if report.is_empty() { None } else { Some(report) },
+                                            repair_report: Some(ConfigRepairReport {
+                                                repairs: report.repairs,
+                                                unrecoverable_error: Some(format!(
+                                                    "Save error: {}",
+                                                    save_err
+                                                )),
+                                                recovery_event: Some(save_event),
+                                            }),
                                         };
                                     }
-                                    InitConfigResult {
+                                } else {
+                                    return InitConfigResult {
                                         config,
                                         is_recovery_mode: false,
                                         conflict: None,
-                                        repair_report: if report.is_empty() { None } else { Some(report) },
-                                    }
+                                        repair_report: if report.is_empty() {
+                                            None
+                                        } else {
+                                            Some(report)
+                                        },
+                                    };
                                 }
-                                Err(config_err) => {
-                                    eprintln!(
-                                        "Fehler beim Laden von {}: {}. Verwende Standardwerte.",
-                                        config_path.display(),
-                                        config_err
-                                    );
-                                    let default_config = Config::default();
-                                    InitConfigResult {
-                                        config: default_config,
-                                        is_recovery_mode: false,
-                                        conflict: None,
-                                        repair_report: Some(ConfigRepairReport {
-                                            repairs: vec![],
-                                            unrecoverable_error: Some(format!("Config error: {}", config_err)),
-                                            recovery_event: Some(event),
-                                        }),
-                                    }
+                                InitConfigResult {
+                                    config,
+                                    is_recovery_mode: false,
+                                    conflict: None,
+                                    repair_report: if report.is_empty() {
+                                        None
+                                    } else {
+                                        Some(report)
+                                    },
                                 }
                             }
-                        } else {
-                            let default_config = Config::default();
-                            InitConfigResult {
-                                config: default_config,
-                                is_recovery_mode: true,
-                                conflict: None,
-                                repair_report: Some(ConfigRepairReport {
-                                    repairs: vec![],
-                                    unrecoverable_error: Some(format!("Incompatible structure: {}", msg)),
-                                    recovery_event: Some(event),
-                                }),
+                            Err(config_err) => {
+                                eprintln!(
+                                    "Fehler beim Laden von {}: {}. Verwende Standardwerte.",
+                                    config_path.display(),
+                                    config_err
+                                );
+                                let default_config = Config::default();
+                                InitConfigResult {
+                                    config: default_config,
+                                    is_recovery_mode: false,
+                                    conflict: None,
+                                    repair_report: Some(ConfigRepairReport {
+                                        repairs: vec![],
+                                        unrecoverable_error: Some(format!(
+                                            "Config error: {}",
+                                            config_err
+                                        )),
+                                        recovery_event: Some(event),
+                                    }),
+                                }
                             }
                         }
+                    } else {
+                        let default_config = Config::default();
+                        InitConfigResult {
+                            config: default_config,
+                            is_recovery_mode: true,
+                            conflict: None,
+                            repair_report: Some(ConfigRepairReport {
+                                repairs: vec![],
+                                unrecoverable_error: Some(format!(
+                                    "Incompatible structure: {}",
+                                    msg
+                                )),
+                                recovery_event: Some(event),
+                            }),
+                        }
                     }
-                    LoadConfigError::Validation(validation_err) => {
-                        eprintln!(
-                            "Validierungsfehler in Recovery-Datei {}: {}. Recovery-Datei wird beibehalten.",
-                            recovery_path.display(),
-                            validation_err
-                        );
-                        let event = RecoveryEvent {
+                }
+                LoadConfigError::Validation(validation_err) => {
+                    eprintln!(
+                        "Validierungsfehler in Recovery-Datei {}: {}. Recovery-Datei wird beibehalten.",
+                        recovery_path.display(),
+                        validation_err
+                    );
+                    let event = RecoveryEvent {
                             event_type: RecoveryEventType::Warning,
                             title: "Recovery-Datei ungültig".to_string(),
                             description: "Die Recovery-Sicherungsdatei enthält ungültige Werte. Die Datei bleibt erhalten für eine manuelle Korrektur.".to_string(),
@@ -1268,13 +1368,16 @@ pub async fn init_config_state<P: AsRef<Path>>(config_path: P) -> InitConfigResu
                                 result: Some("Hauptkonfiguration oder Standardwerte verwendet".to_string()),
                             }),
                         };
-                        if config_exists {
-                            match Config::load_and_repair_from_file_with_retry(config_path).await {
-                                Ok((config, report)) => {
-                                    if report.has_repairs() {
-                                        if let Err(save_err) = config.save_to_file(config_path).await {
-                                            eprintln!("Fehler beim Speichern der reparierten Konfiguration: {}", save_err);
-                                            let save_event = RecoveryEvent {
+                    if config_exists {
+                        match Config::load_and_repair_from_file_with_retry(config_path).await {
+                            Ok((config, report)) => {
+                                if report.has_repairs() {
+                                    if let Err(save_err) = config.save_to_file(config_path).await {
+                                        eprintln!(
+                                            "Fehler beim Speichern der reparierten Konfiguration: {}",
+                                            save_err
+                                        );
+                                        let save_event = RecoveryEvent {
                                                 event_type: RecoveryEventType::Error,
                                                 title: "Speichern der reparierten Konfiguration fehlgeschlagen".to_string(),
                                                 description: "Die Konfiguration wurde erfolgreich repariert, konnte aber nicht gespeichert werden. Die ursprüngliche Datei bleibt unverändert und wird beim nächsten Start erneut repariert.".to_string(),
@@ -1286,67 +1389,83 @@ pub async fn init_config_state<P: AsRef<Path>>(config_path: P) -> InitConfigResu
                                                     result: Some("Reparatur nicht persistent, wiederholt sich beim Neustart".to_string()),
                                                 }),
                                             };
-                                            return InitConfigResult {
-                                                config,
-                                                is_recovery_mode: true,
-                                                conflict: None,
-                                                repair_report: Some(ConfigRepairReport {
-                                                    repairs: report.repairs,
-                                                    unrecoverable_error: Some(format!("Save error: {}", save_err)),
-                                                    recovery_event: Some(save_event),
-                                                }),
-                                            };
-                                        }
-                                    } else {
                                         return InitConfigResult {
                                             config,
-                                            is_recovery_mode: false,
+                                            is_recovery_mode: true,
                                             conflict: None,
-                                            repair_report: if report.is_empty() { None } else { Some(report) },
+                                            repair_report: Some(ConfigRepairReport {
+                                                repairs: report.repairs,
+                                                unrecoverable_error: Some(format!(
+                                                    "Save error: {}",
+                                                    save_err
+                                                )),
+                                                recovery_event: Some(save_event),
+                                            }),
                                         };
                                     }
-                                    InitConfigResult {
+                                } else {
+                                    return InitConfigResult {
                                         config,
                                         is_recovery_mode: false,
                                         conflict: None,
-                                        repair_report: if report.is_empty() { None } else { Some(report) },
-                                    }
+                                        repair_report: if report.is_empty() {
+                                            None
+                                        } else {
+                                            Some(report)
+                                        },
+                                    };
                                 }
-                                Err(config_err) => {
-                                    eprintln!(
-                                        "Fehler beim Laden von {}: {}. Verwende Standardwerte.",
-                                        config_path.display(),
-                                        config_err
-                                    );
-                                    let default_config = Config::default();
-                                    InitConfigResult {
-                                        config: default_config,
-                                        is_recovery_mode: false,
-                                        conflict: None,
-                                        repair_report: Some(ConfigRepairReport {
-                                            repairs: vec![],
-                                            unrecoverable_error: Some(format!("Config error: {}", config_err)),
-                                            recovery_event: Some(event),
-                                        }),
-                                    }
+                                InitConfigResult {
+                                    config,
+                                    is_recovery_mode: false,
+                                    conflict: None,
+                                    repair_report: if report.is_empty() {
+                                        None
+                                    } else {
+                                        Some(report)
+                                    },
                                 }
                             }
-                        } else {
-                            let default_config = Config::default();
-                            InitConfigResult {
-                                config: default_config,
-                                is_recovery_mode: true,
-                                conflict: None,
-                                repair_report: Some(ConfigRepairReport {
-                                    repairs: vec![],
-                                    unrecoverable_error: Some(format!("Validation error: {}", validation_err)),
-                                    recovery_event: Some(event),
-                                }),
+                            Err(config_err) => {
+                                eprintln!(
+                                    "Fehler beim Laden von {}: {}. Verwende Standardwerte.",
+                                    config_path.display(),
+                                    config_err
+                                );
+                                let default_config = Config::default();
+                                InitConfigResult {
+                                    config: default_config,
+                                    is_recovery_mode: false,
+                                    conflict: None,
+                                    repair_report: Some(ConfigRepairReport {
+                                        repairs: vec![],
+                                        unrecoverable_error: Some(format!(
+                                            "Config error: {}",
+                                            config_err
+                                        )),
+                                        recovery_event: Some(event),
+                                    }),
+                                }
                             }
+                        }
+                    } else {
+                        let default_config = Config::default();
+                        InitConfigResult {
+                            config: default_config,
+                            is_recovery_mode: true,
+                            conflict: None,
+                            repair_report: Some(ConfigRepairReport {
+                                repairs: vec![],
+                                unrecoverable_error: Some(format!(
+                                    "Validation error: {}",
+                                    validation_err
+                                )),
+                                recovery_event: Some(event),
+                            }),
                         }
                     }
                 }
-            }
+            },
         }
     } else {
         init_config_without_recovery(config_path, config_exists).await
@@ -1396,7 +1515,10 @@ async fn init_config_without_recovery(config_path: &Path, config_exists: bool) -
             Ok((config, report)) => {
                 if report.has_repairs() {
                     if let Err(save_err) = config.save_to_file(config_path).await {
-                        eprintln!("Fehler beim Speichern der reparierten Konfiguration: {}", save_err);
+                        eprintln!(
+                            "Fehler beim Speichern der reparierten Konfiguration: {}",
+                            save_err
+                        );
                         let save_event = RecoveryEvent {
                             event_type: RecoveryEventType::Error,
                             title: "Speichern der reparierten Konfiguration fehlgeschlagen".to_string(),
@@ -1425,14 +1547,22 @@ async fn init_config_without_recovery(config_path: &Path, config_exists: bool) -
                         config,
                         is_recovery_mode: false,
                         conflict: None,
-                        repair_report: if report.is_empty() { None } else { Some(report) },
+                        repair_report: if report.is_empty() {
+                            None
+                        } else {
+                            Some(report)
+                        },
                     };
                 }
                 InitConfigResult {
                     config,
                     is_recovery_mode: false,
                     conflict: None,
-                    repair_report: if report.is_empty() { None } else { Some(report) },
+                    repair_report: if report.is_empty() {
+                        None
+                    } else {
+                        Some(report)
+                    },
                 }
             }
             Err(LoadConfigError::Io(err)) => {
@@ -1472,13 +1602,19 @@ async fn init_config_without_recovery(config_path: &Path, config_exists: bool) -
                 );
                 let default_config = Config::default();
                 let mut is_rec = false;
-                let (recovery_action, result_str) = match default_config.save_to_file(config_path).await {
+                let (recovery_action, result_str) = match default_config
+                    .save_to_file(config_path)
+                    .await
+                {
                     Ok(_) => (
                         "Neue Standardkonfiguration erstellt und gespeichert".to_string(),
                         "Standardwerte aktiv und gespeichert".to_string(),
                     ),
                     Err(save_err) => {
-                        eprintln!("Fehler beim Speichern der Standardkonfiguration: {}", save_err);
+                        eprintln!(
+                            "Fehler beim Speichern der Standardkonfiguration: {}",
+                            save_err
+                        );
                         is_rec = true;
                         (
                             "Standardwerte als Fallback im Speicher geladen".to_string(),
@@ -1546,7 +1682,10 @@ mod tests {
         assert_eq!(config.mac_address, "AA:BB:CC:DD:EE:FF");
         assert_eq!(config.default_delay, 1000);
         assert_eq!(config.default_action_duration, 120);
-        assert_eq!(config.python_sdk, "C:\\Projekte\\Ubtech-Alpha-1S-SDK\\main.py");
+        assert_eq!(
+            config.python_sdk,
+            "C:\\Projekte\\Ubtech-Alpha-1S-SDK\\main.py"
+        );
         assert_eq!(config.workdir, "C:\\Projekte\\Ubtech-Alpha-1S-SDK");
         assert_eq!(config.venv, "C:\\Projekte\\Ubtech-Alpha-1S-SDK\\.venv");
     }
@@ -1681,7 +1820,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_save_and_load_file_roundtrip() {
-        let temp_dir = std::env::temp_dir().join(format!("ubtech_test_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let temp_dir = std::env::temp_dir().join(format!(
+            "ubtech_test_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
         let config_path = temp_dir.join("subdir").join("config.toml");
 
         let mut config = Config::default();
@@ -1695,7 +1840,9 @@ mod tests {
         assert!(config.save_to_file(&config_path).await.is_ok());
         assert!(config_path.exists());
 
-        let loaded = Config::load_from_file(&config_path).await.expect("failed to load config");
+        let loaded = Config::load_from_file(&config_path)
+            .await
+            .expect("failed to load config");
         assert_eq!(loaded, config);
 
         let _ = tokio::fs::remove_dir_all(&temp_dir).await;
@@ -1703,10 +1850,18 @@ mod tests {
 
     #[tokio::test]
     async fn test_load_from_file_invalid_toml() {
-        let temp_dir = std::env::temp_dir().join(format!("ubtech_test_inv_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let temp_dir = std::env::temp_dir().join(format!(
+            "ubtech_test_inv_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
         let config_path = temp_dir.join("config.toml");
         tokio::fs::create_dir_all(&temp_dir).await.unwrap();
-        tokio::fs::write(&config_path, "invalid toml content = ==").await.unwrap();
+        tokio::fs::write(&config_path, "invalid toml content = ==")
+            .await
+            .unwrap();
 
         assert!(Config::load_from_file(&config_path).await.is_err());
 
@@ -1715,7 +1870,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_load_from_file_repairs_invalid_validation() {
-        let temp_dir = std::env::temp_dir().join(format!("ubtech_test_val_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let temp_dir = std::env::temp_dir().join(format!(
+            "ubtech_test_val_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
         let config_path = temp_dir.join("config.toml");
         tokio::fs::create_dir_all(&temp_dir).await.unwrap();
         let invalid_content = r#"
@@ -1726,13 +1887,20 @@ python_sdk = ""
 workdir = ""
 venv = ""
 "#;
-        tokio::fs::write(&config_path, invalid_content).await.unwrap();
+        tokio::fs::write(&config_path, invalid_content)
+            .await
+            .unwrap();
 
-        let (loaded, report) = Config::load_and_repair_from_file_with_retry(&config_path).await.unwrap();
+        let (loaded, report) = Config::load_and_repair_from_file_with_retry(&config_path)
+            .await
+            .unwrap();
         assert_eq!(loaded.mac_address, "00:11:22:33:44:55");
         assert_eq!(report.repairs.len(), 1);
         assert_eq!(report.repairs[0].field, "mac_address");
-        assert_eq!(report.repairs[0].repair_method, RepairMethod::DefaultFallback);
+        assert_eq!(
+            report.repairs[0].repair_method,
+            RepairMethod::DefaultFallback
+        );
         assert!(!report.repairs[0].success);
 
         let _ = tokio::fs::remove_dir_all(&temp_dir).await;
@@ -1803,7 +1971,10 @@ venv = "path"
 
         assert_eq!(report.repairs[0].field, "python_sdk");
         assert_eq!(report.repairs[0].original_value, serde_json::json!(12345));
-        assert_eq!(report.repairs[0].resulting_value, serde_json::json!("12345"));
+        assert_eq!(
+            report.repairs[0].resulting_value,
+            serde_json::json!("12345")
+        );
         assert_eq!(report.repairs[0].repair_method, RepairMethod::Converted);
         assert!(report.repairs[0].success);
 
@@ -1828,10 +1999,16 @@ venv = ""
         assert_eq!(config.default_action_duration, 50);
         assert_eq!(report.repairs.len(), 1);
         assert_eq!(report.repairs[0].field, "default_action_duration");
-        assert_eq!(report.repairs[0].original_value, serde_json::json!("invalid"));
+        assert_eq!(
+            report.repairs[0].original_value,
+            serde_json::json!("invalid")
+        );
         assert_eq!(report.repairs[0].expected_type, "usize");
         assert_eq!(report.repairs[0].resulting_value, serde_json::json!(50));
-        assert_eq!(report.repairs[0].repair_method, RepairMethod::DefaultFallback);
+        assert_eq!(
+            report.repairs[0].repair_method,
+            RepairMethod::DefaultFallback
+        );
         assert!(!report.repairs[0].success);
     }
 
@@ -1849,7 +2026,10 @@ venv = ""
         assert_eq!(config.default_delay, 500);
         assert_eq!(report.repairs.len(), 1);
         assert_eq!(report.repairs[0].field, "default_delay");
-        assert_eq!(report.repairs[0].repair_method, RepairMethod::DefaultFallback);
+        assert_eq!(
+            report.repairs[0].repair_method,
+            RepairMethod::DefaultFallback
+        );
         assert!(!report.repairs[0].success);
     }
 
@@ -1868,9 +2048,15 @@ venv = ""
         assert_eq!(config.default_action_duration, 50);
         assert_eq!(report.repairs.len(), 2);
         assert_eq!(report.repairs[0].field, "default_delay");
-        assert_eq!(report.repairs[0].repair_method, RepairMethod::DefaultFallback);
+        assert_eq!(
+            report.repairs[0].repair_method,
+            RepairMethod::DefaultFallback
+        );
         assert_eq!(report.repairs[1].field, "default_action_duration");
-        assert_eq!(report.repairs[1].repair_method, RepairMethod::DefaultFallback);
+        assert_eq!(
+            report.repairs[1].repair_method,
+            RepairMethod::DefaultFallback
+        );
     }
 
     #[test]
@@ -1889,9 +2075,16 @@ venv = ""
         assert_eq!(report.repairs[0].field, "default_delay");
         assert_eq!(report.repairs[0].original_value, serde_json::json!("3000"));
         assert_eq!(report.repairs[0].resulting_value, serde_json::json!(500));
-        assert_eq!(report.repairs[0].repair_method, RepairMethod::DefaultFallback);
+        assert_eq!(
+            report.repairs[0].repair_method,
+            RepairMethod::DefaultFallback
+        );
         assert!(!report.repairs[0].success);
-        assert!(report.repairs[0].reason.contains("Standard-Delay muss zwischen 0 und 2000 ms liegen"));
+        assert!(
+            report.repairs[0]
+                .reason
+                .contains("Standard-Delay muss zwischen 0 und 2000 ms liegen")
+        );
     }
 
     #[test]
@@ -1907,8 +2100,20 @@ default_delay = 800
         assert_eq!(config.workdir, "");
         assert_eq!(config.venv, "");
 
-        assert!(report.repairs.iter().any(|r| r.field == "mac_address" && r.repair_method == RepairMethod::DefaultFallback));
-        assert!(report.repairs.iter().any(|r| r.field == "default_action_duration" && r.repair_method == RepairMethod::DefaultFallback));
+        assert!(
+            report
+                .repairs
+                .iter()
+                .any(|r| r.field == "mac_address"
+                    && r.repair_method == RepairMethod::DefaultFallback)
+        );
+        assert!(
+            report
+                .repairs
+                .iter()
+                .any(|r| r.field == "default_action_duration"
+                    && r.repair_method == RepairMethod::DefaultFallback)
+        );
     }
 
     #[test]
@@ -1930,18 +2135,32 @@ venv = "/home/user/project/.venv"
         assert_eq!(config.venv, "/home/user/project/.venv");
 
         assert_eq!(report.repairs.len(), 2);
-        let delay_rep = report.repairs.iter().find(|r| r.field == "default_delay").unwrap();
+        let delay_rep = report
+            .repairs
+            .iter()
+            .find(|r| r.field == "default_delay")
+            .unwrap();
         assert_eq!(delay_rep.repair_method, RepairMethod::Converted);
         assert!(delay_rep.success);
 
-        let dur_rep = report.repairs.iter().find(|r| r.field == "default_action_duration").unwrap();
+        let dur_rep = report
+            .repairs
+            .iter()
+            .find(|r| r.field == "default_action_duration")
+            .unwrap();
         assert_eq!(dur_rep.repair_method, RepairMethod::DefaultFallback);
         assert!(!dur_rep.success);
     }
 
     #[tokio::test]
     async fn test_successful_persistence_of_repaired_configuration() {
-        let temp_dir = std::env::temp_dir().join(format!("ubtech_test_persist_rep_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let temp_dir = std::env::temp_dir().join(format!(
+            "ubtech_test_persist_rep_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
         let config_path = temp_dir.join("config.toml");
         tokio::fs::create_dir_all(&temp_dir).await.unwrap();
 
@@ -1972,11 +2191,19 @@ venv = "/home/user/project/.venv"
 
     #[tokio::test]
     async fn test_completely_malformed_toml_triggers_full_recovery() {
-        let temp_dir = std::env::temp_dir().join(format!("ubtech_test_malformed_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let temp_dir = std::env::temp_dir().join(format!(
+            "ubtech_test_malformed_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
         let config_path = temp_dir.join("config.toml");
         tokio::fs::create_dir_all(&temp_dir).await.unwrap();
 
-        tokio::fs::write(&config_path, "totally [ broken [[ toml").await.unwrap();
+        tokio::fs::write(&config_path, "totally [ broken [[ toml")
+            .await
+            .unwrap();
 
         let init_res = init_config_state(&config_path).await;
         assert_eq!(init_res.config, Config::default());
@@ -1994,7 +2221,13 @@ venv = "/home/user/project/.venv"
 
     #[tokio::test]
     async fn test_load_or_init_creates_default_when_missing() {
-        let temp_dir = std::env::temp_dir().join(format!("ubtech_test_init_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let temp_dir = std::env::temp_dir().join(format!(
+            "ubtech_test_init_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
         let config_path = temp_dir.join("config.toml");
 
         let loaded = Config::load_or_init(&config_path).await;
@@ -2009,11 +2242,19 @@ venv = "/home/user/project/.venv"
 
     #[tokio::test]
     async fn test_load_or_init_replaces_corrupted_toml_with_defaults() {
-        let temp_dir = std::env::temp_dir().join(format!("ubtech_test_corrupt_toml_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let temp_dir = std::env::temp_dir().join(format!(
+            "ubtech_test_corrupt_toml_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
         let config_path = temp_dir.join("config.toml");
         tokio::fs::create_dir_all(&temp_dir).await.unwrap();
         let corrupted_content = "corrupted = true [[[invalid";
-        tokio::fs::write(&config_path, corrupted_content).await.unwrap();
+        tokio::fs::write(&config_path, corrupted_content)
+            .await
+            .unwrap();
 
         let loaded = Config::load_or_init(&config_path).await;
         assert_eq!(loaded, Config::default());
@@ -2028,7 +2269,13 @@ venv = "/home/user/project/.venv"
 
     #[tokio::test]
     async fn test_load_or_init_replaces_invalid_validation_with_defaults() {
-        let temp_dir = std::env::temp_dir().join(format!("ubtech_test_corrupt_val_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let temp_dir = std::env::temp_dir().join(format!(
+            "ubtech_test_corrupt_val_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
         let config_path = temp_dir.join("config.toml");
         tokio::fs::create_dir_all(&temp_dir).await.unwrap();
         let invalid_content = r#"
@@ -2039,7 +2286,9 @@ python_sdk = ""
 workdir = ""
 venv = ""
 "#;
-        tokio::fs::write(&config_path, invalid_content).await.unwrap();
+        tokio::fs::write(&config_path, invalid_content)
+            .await
+            .unwrap();
 
         let loaded = Config::load_or_init(&config_path).await;
         assert_eq!(loaded, Config::default());
@@ -2053,7 +2302,13 @@ venv = ""
 
     #[tokio::test]
     async fn test_io_error_retries_3_times_with_100ms_delay() {
-        let temp_dir = std::env::temp_dir().join(format!("ubtech_test_retry_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let temp_dir = std::env::temp_dir().join(format!(
+            "ubtech_test_retry_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
         let nonexistent_path = temp_dir.join("nonexistent_config.toml");
 
         let start = std::time::Instant::now();
@@ -2062,29 +2317,51 @@ venv = ""
 
         assert!(matches!(result, Err(LoadConfigError::Io(_))));
         // 3 retries with 100ms delay should take at least 300ms
-        assert!(elapsed >= std::time::Duration::from_millis(280), "Expected >= 280ms elapsed, got {:?}", elapsed);
+        assert!(
+            elapsed >= std::time::Duration::from_millis(280),
+            "Expected >= 280ms elapsed, got {:?}",
+            elapsed
+        );
     }
 
     #[tokio::test]
     async fn test_parse_errors_do_not_retry() {
-        let temp_dir = std::env::temp_dir().join(format!("ubtech_test_noretry_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let temp_dir = std::env::temp_dir().join(format!(
+            "ubtech_test_noretry_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
         let parse_err_path = temp_dir.join("parse_err.toml");
         tokio::fs::create_dir_all(&temp_dir).await.unwrap();
 
-        tokio::fs::write(&parse_err_path, "invalid [[[ toml").await.unwrap();
+        tokio::fs::write(&parse_err_path, "invalid [[[ toml")
+            .await
+            .unwrap();
 
         let start_parse = std::time::Instant::now();
         let parse_res = Config::load_from_file_with_retry(&parse_err_path).await;
         let elapsed_parse = start_parse.elapsed();
         assert!(matches!(parse_res, Err(LoadConfigError::Parse(_))));
-        assert!(elapsed_parse < std::time::Duration::from_millis(80), "Parse error took too long: {:?}", elapsed_parse);
+        assert!(
+            elapsed_parse < std::time::Duration::from_millis(80),
+            "Parse error took too long: {:?}",
+            elapsed_parse
+        );
 
         let _ = tokio::fs::remove_dir_all(&temp_dir).await;
     }
 
     #[tokio::test]
     async fn test_normal_loading_after_transient_io_failure() {
-        let temp_dir = std::env::temp_dir().join(format!("ubtech_test_transient_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let temp_dir = std::env::temp_dir().join(format!(
+            "ubtech_test_transient_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
         let config_path = temp_dir.join("config.toml");
         tokio::fs::create_dir_all(&temp_dir).await.unwrap();
 
@@ -2106,7 +2383,13 @@ venv = ""
 
     #[tokio::test]
     async fn test_persistent_io_failure_does_not_overwrite_original_file_and_activates_recovery() {
-        let temp_dir = std::env::temp_dir().join(format!("ubtech_test_persist_io_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let temp_dir = std::env::temp_dir().join(format!(
+            "ubtech_test_persist_io_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
         // Use a directory path as the config_path to induce a read IO error on read_to_string
         let config_path = temp_dir.join("config_dir");
         tokio::fs::create_dir_all(&config_path).await.unwrap();
@@ -2123,7 +2406,13 @@ venv = ""
 
     #[tokio::test]
     async fn test_recovery_changes_survive_restarts() {
-        let temp_dir = std::env::temp_dir().join(format!("ubtech_test_rec_restart_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let temp_dir = std::env::temp_dir().join(format!(
+            "ubtech_test_rec_restart_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
         let config_path = temp_dir.join("config.toml");
         let recovery_path = get_recovery_path(&config_path);
         tokio::fs::create_dir_all(&temp_dir).await.unwrap();
@@ -2142,7 +2431,13 @@ venv = ""
 
     #[tokio::test]
     async fn test_identical_configs_auto_resolves_recovery() {
-        let temp_dir = std::env::temp_dir().join(format!("ubtech_test_identical_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let temp_dir = std::env::temp_dir().join(format!(
+            "ubtech_test_identical_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
         let config_path = temp_dir.join("config.toml");
         let recovery_path = get_recovery_path(&config_path);
 
@@ -2163,7 +2458,13 @@ venv = ""
 
     #[tokio::test]
     async fn test_conflict_detection_and_both_choices() {
-        let temp_dir = std::env::temp_dir().join(format!("ubtech_test_conflict_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let temp_dir = std::env::temp_dir().join(format!(
+            "ubtech_test_conflict_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
         let config_path = temp_dir.join("config.toml");
         let recovery_path = get_recovery_path(&config_path);
 
@@ -2184,7 +2485,10 @@ venv = ""
         assert_eq!(conflict_val.recovery.mac_address, "22:22:22:22:22:22");
 
         // Resolve choosing Recovery
-        let resolved = state.resolve_conflict(crate::app_state::ResolutionChoice::Recovery).await.unwrap();
+        let resolved = state
+            .resolve_conflict(crate::app_state::ResolutionChoice::Recovery)
+            .await
+            .unwrap();
         assert_eq!(resolved.mac_address, "22:22:22:22:22:22");
         assert_eq!(state.settings.lock().await.mac_address, "22:22:22:22:22:22");
         assert!(!recovery_path.exists());
@@ -2192,7 +2496,10 @@ venv = ""
 
         // Verify permanent resolution on disk across restarts
         let reloaded = crate::AppState::init(config_path.clone()).await;
-        assert_eq!(reloaded.settings.lock().await.mac_address, "22:22:22:22:22:22");
+        assert_eq!(
+            reloaded.settings.lock().await.mac_address,
+            "22:22:22:22:22:22"
+        );
         assert!(reloaded.conflict.lock().await.is_none());
 
         // Now test Choice Original
@@ -2201,7 +2508,10 @@ venv = ""
 
         let state_orig = crate::AppState::init(config_path.clone()).await;
         assert!(state_orig.conflict.lock().await.is_some());
-        let resolved_orig = state_orig.resolve_conflict(crate::app_state::ResolutionChoice::Original).await.unwrap();
+        let resolved_orig = state_orig
+            .resolve_conflict(crate::app_state::ResolutionChoice::Original)
+            .await
+            .unwrap();
         assert_eq!(resolved_orig.mac_address, "22:22:22:22:22:22");
         assert!(!recovery_path.exists());
         assert!(state_orig.conflict.lock().await.is_none());
@@ -2211,7 +2521,13 @@ venv = ""
 
     #[tokio::test]
     async fn test_failed_save_preserves_recovery_state() {
-        let temp_dir = std::env::temp_dir().join(format!("ubtech_test_fail_res_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let temp_dir = std::env::temp_dir().join(format!(
+            "ubtech_test_fail_res_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
         // Make config_path invalid for writing (directory instead of file)
         let config_path = temp_dir.join("invalid_dir_config");
         tokio::fs::create_dir_all(&config_path).await.unwrap();
@@ -2233,7 +2549,9 @@ venv = ""
             None,
         );
 
-        let res = state.resolve_conflict(crate::app_state::ResolutionChoice::Recovery).await;
+        let res = state
+            .resolve_conflict(crate::app_state::ResolutionChoice::Recovery)
+            .await;
         assert!(res.is_err());
         // Recovery file should still exist
         assert!(recovery_path.exists());
@@ -2245,7 +2563,13 @@ venv = ""
 
     #[tokio::test]
     async fn test_failed_write_preserves_previous_configuration() {
-        let temp_dir = std::env::temp_dir().join(format!("ubtech_test_failed_write_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let temp_dir = std::env::temp_dir().join(format!(
+            "ubtech_test_failed_write_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
         let config_path = temp_dir.join("config.toml");
 
         let mut valid_config = Config::default();
@@ -2274,7 +2598,13 @@ venv = ""
 
     #[tokio::test]
     async fn test_concurrent_writes_do_not_corrupt_file() {
-        let temp_dir = std::env::temp_dir().join(format!("ubtech_test_concurrent_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let temp_dir = std::env::temp_dir().join(format!(
+            "ubtech_test_concurrent_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
         let config_path = temp_dir.join("config.toml");
 
         let mut handles = Vec::new();
@@ -2297,14 +2627,24 @@ venv = ""
 
         // Verify that the final file is valid TOML and deserializes cleanly
         let loaded = Config::load_from_file(&config_path).await;
-        assert!(loaded.is_ok(), "Config on disk corrupted by concurrent writes: {:?}", loaded.err());
+        assert!(
+            loaded.is_ok(),
+            "Config on disk corrupted by concurrent writes: {:?}",
+            loaded.err()
+        );
 
         let _ = tokio::fs::remove_dir_all(&temp_dir).await;
     }
 
     #[tokio::test]
     async fn test_persistence_across_restarts() {
-        let temp_dir = std::env::temp_dir().join(format!("ubtech_test_restart_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let temp_dir = std::env::temp_dir().join(format!(
+            "ubtech_test_restart_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
         let config_path = temp_dir.join("config.toml");
 
         let mut initial_config = Config::default();
@@ -2326,7 +2666,13 @@ venv = ""
 
     #[tokio::test]
     async fn test_atomic_write_leaves_no_temp_files() {
-        let temp_dir = std::env::temp_dir().join(format!("ubtech_test_notemp_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let temp_dir = std::env::temp_dir().join(format!(
+            "ubtech_test_notemp_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
         let config_path = temp_dir.join("config.toml");
 
         let config = Config::default();
@@ -2345,11 +2691,19 @@ venv = ""
 
     #[tokio::test]
     async fn test_malformed_toml_generates_recovery_event_with_details() {
-        let temp_dir = std::env::temp_dir().join(format!("ubtech_test_ev_malformed_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let temp_dir = std::env::temp_dir().join(format!(
+            "ubtech_test_ev_malformed_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
         let config_path = temp_dir.join("config.toml");
         tokio::fs::create_dir_all(&temp_dir).await.unwrap();
 
-        tokio::fs::write(&config_path, "totally [ broken [[ toml").await.unwrap();
+        tokio::fs::write(&config_path, "totally [ broken [[ toml")
+            .await
+            .unwrap();
 
         let init_res = init_config_state(&config_path).await;
         assert_eq!(init_res.config, Config::default());
@@ -2359,7 +2713,10 @@ venv = ""
         assert!(report.recovery_event.is_some());
         let event = report.recovery_event.unwrap();
         assert_eq!(event.event_type, RecoveryEventType::Warning);
-        assert_eq!(event.title, "Konfiguration mit Standardwerten wiederhergestellt");
+        assert_eq!(
+            event.title,
+            "Konfiguration mit Standardwerten wiederhergestellt"
+        );
         assert!(event.details.is_some());
         let details = event.details.unwrap();
         assert!(details.affected_file.is_some());
@@ -2371,7 +2728,13 @@ venv = ""
 
     #[tokio::test]
     async fn test_recovery_from_backup_generates_success_event() {
-        let temp_dir = std::env::temp_dir().join(format!("ubtech_test_ev_backup_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let temp_dir = std::env::temp_dir().join(format!(
+            "ubtech_test_ev_backup_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
         let config_path = temp_dir.join("config.toml");
         let recovery_path = get_recovery_path(&config_path);
         tokio::fs::create_dir_all(&temp_dir).await.unwrap();
@@ -2390,14 +2753,23 @@ venv = ""
         let event = report.recovery_event.unwrap();
         assert_eq!(event.event_type, RecoveryEventType::Success);
         assert_eq!(event.title, "Konfiguration aus Sicherung wiederhergestellt");
-        assert_eq!(event.details.unwrap().source.unwrap(), "Recovery-Sicherungsdatei");
+        assert_eq!(
+            event.details.unwrap().source.unwrap(),
+            "Recovery-Sicherungsdatei"
+        );
 
         let _ = tokio::fs::remove_dir_all(&temp_dir).await;
     }
 
     #[tokio::test]
     async fn test_persistent_io_failure_generates_error_event() {
-        let temp_dir = std::env::temp_dir().join(format!("ubtech_test_ev_io_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let temp_dir = std::env::temp_dir().join(format!(
+            "ubtech_test_ev_io_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
         let config_path = temp_dir.join("config.toml");
         // Create directory where file is expected to induce read IO error
         tokio::fs::create_dir_all(&config_path).await.unwrap();
@@ -2419,7 +2791,13 @@ venv = ""
     async fn test_save_to_file_overwrite_existing() {
         // Test that save_to_file reliably overwrites an existing config file
         // (validates that tokio::fs::rename works on Windows with existing destination)
-        let temp_dir = std::env::temp_dir().join(format!("ubtech_test_overwrite_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let temp_dir = std::env::temp_dir().join(format!(
+            "ubtech_test_overwrite_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
         let config_path = temp_dir.join("config.toml");
 
         // First save
@@ -2436,7 +2814,9 @@ venv = ""
         assert!(config2.save_to_file(&config_path).await.is_ok());
 
         // Verify the file now contains the second config
-        let loaded = Config::load_from_file(&config_path).await.expect("failed to load config");
+        let loaded = Config::load_from_file(&config_path)
+            .await
+            .expect("failed to load config");
         assert_eq!(loaded.mac_address, "AA:BB:CC:DD:EE:FF");
         assert_eq!(loaded.default_delay, 1000);
 
@@ -2454,7 +2834,13 @@ venv = ""
     #[tokio::test]
     async fn test_save_to_file_repeated_overwrite() {
         // Test repeated overwrites (100 iterations) to ensure rename is stable
-        let temp_dir = std::env::temp_dir().join(format!("ubtech_test_repeat_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let temp_dir = std::env::temp_dir().join(format!(
+            "ubtech_test_repeat_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
         let config_path = temp_dir.join("config.toml");
 
         for i in 0..100 {
@@ -2468,7 +2854,9 @@ venv = ""
         }
 
         // Verify final state
-        let loaded = Config::load_from_file(&config_path).await.expect("failed to load config");
+        let loaded = Config::load_from_file(&config_path)
+            .await
+            .expect("failed to load config");
         assert_eq!(loaded.default_delay, 99);
 
         // No leftover temp files
@@ -2480,7 +2868,10 @@ venv = ""
                 temp_count += 1;
             }
         }
-        assert_eq!(temp_count, 0, "leftover temp files found after repeated saves");
+        assert_eq!(
+            temp_count, 0,
+            "leftover temp files found after repeated saves"
+        );
 
         let _ = tokio::fs::remove_dir_all(&temp_dir).await;
     }
@@ -2490,7 +2881,13 @@ venv = ""
         // Test that if save fails partway, the original config file is not corrupted.
         // We simulate this by saving successfully, then verifying the original is intact
         // even after a failed save attempt (e.g., saving to a path that is a directory).
-        let temp_dir = std::env::temp_dir().join(format!("ubtech_test_preserve_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let temp_dir = std::env::temp_dir().join(format!(
+            "ubtech_test_preserve_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
         let config_path = temp_dir.join("config.toml");
 
         let mut config = Config::default();
@@ -2502,7 +2899,9 @@ venv = ""
         config.default_delay = 750;
         assert!(config.save_to_file(&config_path).await.is_ok());
 
-        let loaded = Config::load_from_file(&config_path).await.expect("failed to load config");
+        let loaded = Config::load_from_file(&config_path)
+            .await
+            .expect("failed to load config");
         assert_eq!(loaded.default_delay, 750);
         assert_eq!(loaded.mac_address, "11:22:33:44:55:66");
 
@@ -2518,14 +2917,22 @@ venv = ""
         // Strategy: Write malformed TOML to config_path (triggers parse error),
         // then replace config_path with a directory so that saving fails.
         // The recovery file is in a sibling directory, so it remains accessible.
-        let temp_dir = std::env::temp_dir().join(format!("ubtech_test_rec_save_fail_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let temp_dir = std::env::temp_dir().join(format!(
+            "ubtech_test_rec_save_fail_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
         tokio::fs::create_dir_all(&temp_dir).await.unwrap();
-        
+
         let config_path = temp_dir.join("config.toml");
         let recovery_path = get_recovery_path(&config_path);
 
         // Write completely malformed TOML to config_path so it triggers a parse error
-        tokio::fs::write(&config_path, "{{{invalid toml content!!!}}").await.unwrap();
+        tokio::fs::write(&config_path, "{{{invalid toml content!!!}}")
+            .await
+            .unwrap();
 
         // Create a recovery file with default config
         let default_config = Config::default();
@@ -2534,13 +2941,13 @@ venv = ""
         // Replace the malformed config file with a directory so that:
         // 1. Loading fails with IO error (directory, not file) — triggers the parse-error branch
         //    Wait, this triggers IO error, not parse error.
-        // 
+        //
         // Actually: config_exists = true (directory exists), then load fails with IO error.
         // This goes to the LoadConfigError::Io branch at line 747, not the Err(err) branch.
         //
         // To trigger the Err(err) branch (parse error), we need the file to be readable
         // but contain invalid TOML. Then saving must fail.
-        // 
+        //
         // We can't easily make saving fail while keeping the file readable on Windows.
         // So we test the IO error branch instead, which also had the same bug pattern.
         //
@@ -2551,11 +2958,17 @@ venv = ""
         let init_res = init_config_state(&config_path).await;
 
         // In the IO error branch, recovery config is used and recovery mode is activated
-        assert!(init_res.is_recovery_mode, "Expected recovery mode when load fails with IO error");
+        assert!(
+            init_res.is_recovery_mode,
+            "Expected recovery mode when load fails with IO error"
+        );
         assert_eq!(init_res.config, default_config);
 
         // Recovery file must still exist (it was not deleted in the IO error branch)
-        assert!(recovery_path.exists(), "Recovery file must be preserved when load fails");
+        assert!(
+            recovery_path.exists(),
+            "Recovery file must be preserved when load fails"
+        );
 
         // Repair report should indicate warning (IO error branch uses Warning)
         assert!(init_res.repair_report.is_some());
@@ -2575,14 +2988,22 @@ venv = ""
         // We verify this by checking that the code path for save failure exists.
         // Since we cannot easily trigger a parse error + save failure on Windows,
         // we test the successful path and verify the recovery file is deleted.
-        let temp_dir = std::env::temp_dir().join(format!("ubtech_test_rec_def_save_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let temp_dir = std::env::temp_dir().join(format!(
+            "ubtech_test_rec_def_save_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
         tokio::fs::create_dir_all(&temp_dir).await.unwrap();
-        
+
         let config_path = temp_dir.join("config.toml");
         let recovery_path = get_recovery_path(&config_path);
 
         // Write malformed TOML to config_path
-        tokio::fs::write(&config_path, "{{{invalid toml content!!!}}").await.unwrap();
+        tokio::fs::write(&config_path, "{{{invalid toml content!!!}}")
+            .await
+            .unwrap();
 
         // Create a recovery file with default config
         let default_config = Config::default();
@@ -2591,14 +3012,22 @@ venv = ""
         let init_res = init_config_state(&config_path).await;
 
         // Should succeed — parse error in original, recovery equals defaults, save succeeds
-        assert!(!init_res.is_recovery_mode, "Expected no recovery mode when save succeeds");
+        assert!(
+            !init_res.is_recovery_mode,
+            "Expected no recovery mode when save succeeds"
+        );
         assert_eq!(init_res.config, default_config);
 
         // Recovery file should be deleted after successful save
-        assert!(!recovery_path.exists(), "Recovery file should be removed after successful save");
+        assert!(
+            !recovery_path.exists(),
+            "Recovery file should be removed after successful save"
+        );
 
         // Config file should now contain the default config
-        let loaded = Config::load_from_file(&config_path).await.expect("failed to load config");
+        let loaded = Config::load_from_file(&config_path)
+            .await
+            .expect("failed to load config");
         assert_eq!(loaded, default_config);
 
         // Repair report should indicate success
@@ -2616,7 +3045,13 @@ venv = ""
     async fn test_recovery_identical_configs_with_repairs() {
         // Test: When original and recovery configs are identical with repairs,
         // the recovery file is cleaned up after successful save.
-        let temp_dir = std::env::temp_dir().join(format!("ubtech_test_rec_ident_save_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let temp_dir = std::env::temp_dir().join(format!(
+            "ubtech_test_rec_ident_save_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
         tokio::fs::create_dir_all(&temp_dir).await.unwrap();
         let config_path = temp_dir.join("config.toml");
         let recovery_path = get_recovery_path(&config_path);
@@ -2639,7 +3074,10 @@ venv = ""
         // Should not be in recovery mode because save should succeed
         assert!(!init_res.is_recovery_mode);
         // Recovery file should be cleaned up after successful save
-        assert!(!recovery_path.exists(), "Recovery file should be removed after successful save");
+        assert!(
+            !recovery_path.exists(),
+            "Recovery file should be removed after successful save"
+        );
         // Should have repairs from string conversion
         assert!(init_res.repair_report.is_some());
         let report = init_res.repair_report.unwrap();
@@ -2675,7 +3113,13 @@ venv = ""
         // Most reliable test: Recovery file is a directory (IO error on load),
         // config file has repairs. The code loads config, repairs it, tries to save.
         // We make the config file read-only so the atomic save (write temp + rename) fails.
-        let temp_dir = std::env::temp_dir().join(format!("ubtech_test_repair_save_fail_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let temp_dir = std::env::temp_dir().join(format!(
+            "ubtech_test_repair_save_fail_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
         tokio::fs::create_dir_all(&temp_dir).await.unwrap();
         let config_path = temp_dir.join("config.toml");
         let recovery_path = get_recovery_path(&config_path);
@@ -2707,20 +3151,46 @@ venv = ""
         std::fs::set_permissions(&config_path, perms).unwrap();
 
         // Must enter recovery mode because save failed
-        assert!(init_res.is_recovery_mode, "Expected recovery mode when save of repaired config fails");
+        assert!(
+            init_res.is_recovery_mode,
+            "Expected recovery mode when save of repaired config fails"
+        );
 
         // Repair report must indicate the save error
-        assert!(init_res.repair_report.is_some(), "Repair report must be present");
+        assert!(
+            init_res.repair_report.is_some(),
+            "Repair report must be present"
+        );
         let report = init_res.repair_report.as_ref().unwrap();
-        assert!(report.unrecoverable_error.is_some(), "Unrecoverable error must be set on save failure");
-        assert!(report.unrecoverable_error.as_ref().unwrap().contains("Save error"), 
-            "Error message must mention save error: {:?}", report.unrecoverable_error);
+        assert!(
+            report.unrecoverable_error.is_some(),
+            "Unrecoverable error must be set on save failure"
+        );
+        assert!(
+            report
+                .unrecoverable_error
+                .as_ref()
+                .unwrap()
+                .contains("Save error"),
+            "Error message must mention save error: {:?}",
+            report.unrecoverable_error
+        );
 
         // Recovery event must be Error type
-        assert!(report.recovery_event.is_some(), "Recovery event must be present");
+        assert!(
+            report.recovery_event.is_some(),
+            "Recovery event must be present"
+        );
         let event = report.recovery_event.as_ref().unwrap();
-        assert_eq!(event.event_type, RecoveryEventType::Error, "Event type must be Error");
-        assert_eq!(event.title, "Speichern der reparierten Konfiguration fehlgeschlagen");
+        assert_eq!(
+            event.event_type,
+            RecoveryEventType::Error,
+            "Event type must be Error"
+        );
+        assert_eq!(
+            event.title,
+            "Speichern der reparierten Konfiguration fehlgeschlagen"
+        );
 
         // Config should still be usable in memory (repaired values)
         assert_eq!(init_res.config.default_delay, 800);
