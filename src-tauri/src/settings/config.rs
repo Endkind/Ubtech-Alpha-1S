@@ -1,5 +1,4 @@
-use std::path::Path;
-use std::process::exit;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use serde::{Deserialize, Serialize};
 use tokio::io::AsyncWriteExt;
@@ -7,6 +6,130 @@ use validator::Validate;
 use crate::validator::regex::MAC_ADDRESS as MAC_ADDRESS_REGEX;
 
 static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+pub const MAX_IO_RETRIES: usize = 3;
+pub const IO_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(100);
+
+#[derive(Debug)]
+pub enum LoadConfigError {
+    Io(std::io::Error),
+    Parse(toml::de::Error),
+    IncompatibleStructure(String),
+    Validation(validator::ValidationErrors),
+}
+
+impl std::fmt::Display for LoadConfigError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LoadConfigError::Io(e) => write!(f, "IO error: {}", e),
+            LoadConfigError::Parse(e) => write!(f, "Parse error: {}", e),
+            LoadConfigError::IncompatibleStructure(e) => write!(f, "Incompatible structure: {}", e),
+            LoadConfigError::Validation(e) => write!(f, "Validation error: {}", e),
+        }
+    }
+}
+
+impl std::error::Error for LoadConfigError {}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RepairMethod {
+    Converted,
+    DefaultFallback,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FieldRepair {
+    pub field: String,
+    pub original_value: serde_json::Value,
+    pub expected_type: String,
+    pub reason: String,
+    pub resulting_value: serde_json::Value,
+    pub repair_method: RepairMethod,
+    pub success: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RecoveryEventType {
+    Info,
+    Success,
+    Warning,
+    Error,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RecoveryDetails {
+    pub affected_file: Option<String>,
+    pub error_cause: Option<String>,
+    pub recovery_action: Option<String>,
+    pub source: Option<String>,
+    pub result: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RecoveryEvent {
+    pub event_type: RecoveryEventType,
+    pub title: String,
+    pub description: String,
+    pub details: Option<RecoveryDetails>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct ConfigRepairReport {
+    pub repairs: Vec<FieldRepair>,
+    pub unrecoverable_error: Option<String>,
+    pub recovery_event: Option<RecoveryEvent>,
+}
+
+impl ConfigRepairReport {
+    pub fn is_empty(&self) -> bool {
+        self.repairs.is_empty()
+            && self.unrecoverable_error.is_none()
+            && self.recovery_event.is_none()
+    }
+
+    pub fn has_fallback(&self) -> bool {
+        self.repairs.iter().any(|r| r.repair_method == RepairMethod::DefaultFallback)
+            || self.unrecoverable_error.is_some()
+            || self.recovery_event.as_ref().map(|e| e.event_type == RecoveryEventType::Warning || e.event_type == RecoveryEventType::Error).unwrap_or(false)
+    }
+
+    pub fn has_repairs(&self) -> bool {
+        !self.repairs.is_empty()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConfigConflict {
+    pub original: Config,
+    pub recovery: Config,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InitConfigResult {
+    pub config: Config,
+    pub is_recovery_mode: bool,
+    pub conflict: Option<ConfigConflict>,
+    pub repair_report: Option<ConfigRepairReport>,
+}
+
+pub fn get_recovery_path<P: AsRef<Path>>(config_path: P) -> PathBuf {
+    let p = config_path.as_ref();
+    if let Some(file_name) = p.file_name().and_then(|f| f.to_str()) {
+        let recovery_file_name = if let Some(stem) = file_name.strip_suffix(".toml") {
+            format!("{}.recovery.toml", stem)
+        } else {
+            format!("{}.recovery", file_name)
+        };
+        if let Some(parent) = p.parent().filter(|p| !p.as_os_str().is_empty()) {
+            return parent.join(recovery_file_name);
+        } else {
+            return PathBuf::from(recovery_file_name);
+        }
+    }
+    PathBuf::from("config.recovery.toml")
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct UpdateConfig {
@@ -34,7 +157,402 @@ pub struct Config {
     pub venv: String,
 }
 
+fn toml_to_json(val: &toml::Value) -> serde_json::Value {
+    match val {
+        toml::Value::String(s) => serde_json::Value::String(s.clone()),
+        toml::Value::Integer(i) => serde_json::Value::Number((*i).into()),
+        toml::Value::Float(f) => serde_json::Number::from_f64(*f)
+            .map(serde_json::Value::Number)
+            .unwrap_or(serde_json::Value::Null),
+        toml::Value::Boolean(b) => serde_json::Value::Bool(*b),
+        toml::Value::Datetime(d) => serde_json::Value::String(d.to_string()),
+        toml::Value::Array(arr) => {
+            serde_json::Value::Array(arr.iter().map(toml_to_json).collect())
+        }
+        toml::Value::Table(t) => {
+            let mut map = serde_json::Map::new();
+            for (k, v) in t {
+                map.insert(k.clone(), toml_to_json(v));
+            }
+            serde_json::Value::Object(map)
+        }
+    }
+}
+
+fn extract_field_error(errs: &validator::ValidationErrors, field: &str) -> Option<String> {
+    errs.field_errors()
+        .get(field)
+        .and_then(|f_errs| f_errs.first())
+        .and_then(|err| err.message.as_ref().map(|msg| msg.to_string()))
+}
+
+fn convert_and_validate_usize<F>(
+    field_name: &str,
+    val_opt: Option<&toml::Value>,
+    default_val: usize,
+    validate: F,
+    repairs: &mut Vec<FieldRepair>,
+) -> usize
+where
+    F: FnOnce(usize) -> Result<(), String>,
+{
+    match val_opt {
+        None => {
+            repairs.push(FieldRepair {
+                field: field_name.to_string(),
+                original_value: serde_json::Value::Null,
+                expected_type: "usize".to_string(),
+                reason: "Missing required field".to_string(),
+                resulting_value: serde_json::json!(default_val),
+                repair_method: RepairMethod::DefaultFallback,
+                success: false,
+            });
+            default_val
+        }
+        Some(toml::Value::Integer(i)) => {
+            if *i < 0 {
+                repairs.push(FieldRepair {
+                    field: field_name.to_string(),
+                    original_value: serde_json::json!(i),
+                    expected_type: "usize".to_string(),
+                    reason: "Negative value for unsigned integer".to_string(),
+                    resulting_value: serde_json::json!(default_val),
+                    repair_method: RepairMethod::DefaultFallback,
+                    success: false,
+                });
+                default_val
+            } else if *i as u128 > usize::MAX as u128 {
+                repairs.push(FieldRepair {
+                    field: field_name.to_string(),
+                    original_value: serde_json::json!(i),
+                    expected_type: "usize".to_string(),
+                    reason: "Numeric overflow for usize".to_string(),
+                    resulting_value: serde_json::json!(default_val),
+                    repair_method: RepairMethod::DefaultFallback,
+                    success: false,
+                });
+                default_val
+            } else {
+                let val = *i as usize;
+                match validate(val) {
+                    Ok(_) => val,
+                    Err(err_msg) => {
+                        repairs.push(FieldRepair {
+                            field: field_name.to_string(),
+                            original_value: serde_json::json!(i),
+                            expected_type: "usize".to_string(),
+                            reason: err_msg,
+                            resulting_value: serde_json::json!(default_val),
+                            repair_method: RepairMethod::DefaultFallback,
+                            success: false,
+                        });
+                        default_val
+                    }
+                }
+            }
+        }
+        Some(toml::Value::String(s)) => {
+            let parse_res = if s.starts_with('-') || s.parse::<i64>().map(|v| v < 0).unwrap_or(false) {
+                Err("Negative value for unsigned integer".to_string())
+            } else if s.parse::<f64>().is_ok() && s.contains('.') {
+                Err("Cannot convert floating-point string to integer without loss".to_string())
+            } else if s.parse::<u128>().map(|v| v > usize::MAX as u128).unwrap_or(false) {
+                Err("Numeric overflow".to_string())
+            } else {
+                match s.parse::<usize>() {
+                    Ok(val) => Ok(val),
+                    Err(_) => Err("Cannot convert string to unsigned integer".to_string()),
+                }
+            };
+
+            match parse_res {
+                Ok(val) => {
+                    match validate(val) {
+                        Ok(_) => {
+                            repairs.push(FieldRepair {
+                                field: field_name.to_string(),
+                                original_value: serde_json::json!(s),
+                                expected_type: "usize".to_string(),
+                                reason: "Converted string to unsigned integer".to_string(),
+                                resulting_value: serde_json::json!(val),
+                                repair_method: RepairMethod::Converted,
+                                success: true,
+                            });
+                            val
+                        }
+                        Err(err_msg) => {
+                            repairs.push(FieldRepair {
+                                field: field_name.to_string(),
+                                original_value: serde_json::json!(s),
+                                expected_type: "usize".to_string(),
+                                reason: err_msg,
+                                resulting_value: serde_json::json!(default_val),
+                                repair_method: RepairMethod::DefaultFallback,
+                                success: false,
+                            });
+                            default_val
+                        }
+                    }
+                }
+                Err(err_msg) => {
+                    repairs.push(FieldRepair {
+                        field: field_name.to_string(),
+                        original_value: serde_json::json!(s),
+                        expected_type: "usize".to_string(),
+                        reason: err_msg,
+                        resulting_value: serde_json::json!(default_val),
+                        repair_method: RepairMethod::DefaultFallback,
+                        success: false,
+                    });
+                    default_val
+                }
+            }
+        }
+        Some(other) => {
+            let type_str = match other {
+                toml::Value::Float(_) => "float",
+                toml::Value::Boolean(_) => "boolean",
+                toml::Value::Datetime(_) => "datetime",
+                toml::Value::Array(_) => "array",
+                toml::Value::Table(_) => "table",
+                _ => "unknown",
+            };
+            repairs.push(FieldRepair {
+                field: field_name.to_string(),
+                original_value: toml_to_json(other),
+                expected_type: "usize".to_string(),
+                reason: format!("Cannot convert {} to unsigned integer", type_str),
+                resulting_value: serde_json::json!(default_val),
+                repair_method: RepairMethod::DefaultFallback,
+                success: false,
+            });
+            default_val
+        }
+    }
+}
+
+fn convert_and_validate_string<F>(
+    field_name: &str,
+    val_opt: Option<&toml::Value>,
+    default_val: &str,
+    validate: F,
+    repairs: &mut Vec<FieldRepair>,
+) -> String
+where
+    F: FnOnce(&str) -> Result<(), String>,
+{
+    match val_opt {
+        None => {
+            repairs.push(FieldRepair {
+                field: field_name.to_string(),
+                original_value: serde_json::Value::Null,
+                expected_type: "String".to_string(),
+                reason: "Missing required field".to_string(),
+                resulting_value: serde_json::json!(default_val),
+                repair_method: RepairMethod::DefaultFallback,
+                success: false,
+            });
+            default_val.to_string()
+        }
+        Some(toml::Value::String(s)) => {
+            match validate(s) {
+                Ok(_) => s.clone(),
+                Err(err_msg) => {
+                    repairs.push(FieldRepair {
+                        field: field_name.to_string(),
+                        original_value: serde_json::json!(s),
+                        expected_type: "String".to_string(),
+                        reason: err_msg,
+                        resulting_value: serde_json::json!(default_val),
+                        repair_method: RepairMethod::DefaultFallback,
+                        success: false,
+                    });
+                    default_val.to_string()
+                }
+            }
+        }
+        Some(toml::Value::Integer(i)) => {
+            let converted = i.to_string();
+            match validate(&converted) {
+                Ok(_) => {
+                    repairs.push(FieldRepair {
+                        field: field_name.to_string(),
+                        original_value: serde_json::json!(i),
+                        expected_type: "String".to_string(),
+                        reason: "Converted integer to string".to_string(),
+                        resulting_value: serde_json::json!(converted),
+                        repair_method: RepairMethod::Converted,
+                        success: true,
+                    });
+                    converted
+                }
+                Err(err_msg) => {
+                    repairs.push(FieldRepair {
+                        field: field_name.to_string(),
+                        original_value: serde_json::json!(i),
+                        expected_type: "String".to_string(),
+                        reason: err_msg,
+                        resulting_value: serde_json::json!(default_val),
+                        repair_method: RepairMethod::DefaultFallback,
+                        success: false,
+                    });
+                    default_val.to_string()
+                }
+            }
+        }
+        Some(toml::Value::Boolean(b)) => {
+            let converted = b.to_string();
+            match validate(&converted) {
+                Ok(_) => {
+                    repairs.push(FieldRepair {
+                        field: field_name.to_string(),
+                        original_value: serde_json::json!(b),
+                        expected_type: "String".to_string(),
+                        reason: "Converted boolean to string".to_string(),
+                        resulting_value: serde_json::json!(converted),
+                        repair_method: RepairMethod::Converted,
+                        success: true,
+                    });
+                    converted
+                }
+                Err(err_msg) => {
+                    repairs.push(FieldRepair {
+                        field: field_name.to_string(),
+                        original_value: serde_json::json!(b),
+                        expected_type: "String".to_string(),
+                        reason: err_msg,
+                        resulting_value: serde_json::json!(default_val),
+                        repair_method: RepairMethod::DefaultFallback,
+                        success: false,
+                    });
+                    default_val.to_string()
+                }
+            }
+        }
+        Some(other) => {
+            let type_str = match other {
+                toml::Value::Float(_) => "float",
+                toml::Value::Datetime(_) => "datetime",
+                toml::Value::Array(_) => "array",
+                toml::Value::Table(_) => "table",
+                _ => "unknown",
+            };
+            repairs.push(FieldRepair {
+                field: field_name.to_string(),
+                original_value: toml_to_json(other),
+                expected_type: "String".to_string(),
+                reason: format!("Cannot convert {} to string", type_str),
+                resulting_value: serde_json::json!(default_val),
+                repair_method: RepairMethod::DefaultFallback,
+                success: false,
+            });
+            default_val.to_string()
+        }
+    }
+}
+
 impl Config {
+    pub fn parse_and_repair(content: &str) -> Result<(Self, ConfigRepairReport), LoadConfigError> {
+        let value: toml::Value = toml::from_str(content).map_err(LoadConfigError::Parse)?;
+        let table = match value {
+            toml::Value::Table(t) => t,
+            _ => {
+                return Err(LoadConfigError::IncompatibleStructure(
+                    "TOML document is not a table".to_string(),
+                ));
+            }
+        };
+
+        let default_config = Self::default();
+        let mut repairs = Vec::new();
+
+        let mac_address = convert_and_validate_string(
+            "mac_address",
+            table.get("mac_address"),
+            &default_config.mac_address,
+            |val| {
+                let mut test_cfg = default_config.clone();
+                test_cfg.mac_address = val.to_string();
+                test_cfg.validate().map_err(|errs| {
+                    extract_field_error(&errs, "mac_address")
+                        .unwrap_or_else(|| "Invalid MAC address".to_string())
+                })
+            },
+            &mut repairs,
+        );
+
+        let default_delay = convert_and_validate_usize(
+            "default_delay",
+            table.get("default_delay"),
+            default_config.default_delay,
+            |val| {
+                let mut test_cfg = default_config.clone();
+                test_cfg.default_delay = val;
+                test_cfg.validate().map_err(|errs| {
+                    extract_field_error(&errs, "default_delay")
+                        .unwrap_or_else(|| "Invalid default delay".to_string())
+                })
+            },
+            &mut repairs,
+        );
+
+        let default_action_duration = convert_and_validate_usize(
+            "default_action_duration",
+            table.get("default_action_duration"),
+            default_config.default_action_duration,
+            |val| {
+                let mut test_cfg = default_config.clone();
+                test_cfg.default_action_duration = val;
+                test_cfg.validate().map_err(|errs| {
+                    extract_field_error(&errs, "default_action_duration")
+                        .unwrap_or_else(|| "Invalid default action duration".to_string())
+                })
+            },
+            &mut repairs,
+        );
+
+        let python_sdk = convert_and_validate_string(
+            "python_sdk",
+            table.get("python_sdk"),
+            &default_config.python_sdk,
+            |_| Ok(()),
+            &mut repairs,
+        );
+
+        let workdir = convert_and_validate_string(
+            "workdir",
+            table.get("workdir"),
+            &default_config.workdir,
+            |_| Ok(()),
+            &mut repairs,
+        );
+
+        let venv = convert_and_validate_string(
+            "venv",
+            table.get("venv"),
+            &default_config.venv,
+            |_| Ok(()),
+            &mut repairs,
+        );
+
+        let config = Config {
+            mac_address,
+            default_delay,
+            default_action_duration,
+            python_sdk,
+            workdir,
+            venv,
+        };
+
+        let report = ConfigRepairReport {
+            repairs,
+            unrecoverable_error: None,
+            recovery_event: None,
+        };
+
+        Ok((config, report))
+    }
+
     pub fn update(&mut self, update: UpdateConfig) -> Result<(), validator::ValidationErrors> {
         let mut new_config = self.clone();
 
@@ -68,11 +586,58 @@ impl Config {
         Ok(())
     }
 
-    pub async fn load_from_file<P: AsRef<Path>>(path: P) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        let content = tokio::fs::read_to_string(path).await?;
-        let config: Config = toml::from_str(&content)?;
-        config.validate()?;
+    pub async fn load_and_repair_from_file_with_retry_opts<P: AsRef<Path>>(
+        path: P,
+        max_retries: usize,
+        retry_delay: std::time::Duration,
+    ) -> Result<(Self, ConfigRepairReport), LoadConfigError> {
+        let path = path.as_ref();
+        let mut attempts = 0;
+
+        loop {
+            match tokio::fs::read_to_string(path).await {
+                Ok(content) => {
+                    return Self::parse_and_repair(&content);
+                }
+                Err(e) => {
+                    if attempts < max_retries {
+                        attempts += 1;
+                        tokio::time::sleep(retry_delay).await;
+                    } else {
+                        return Err(LoadConfigError::Io(e));
+                    }
+                }
+            }
+        }
+    }
+
+    pub async fn load_and_repair_from_file_with_retry<P: AsRef<Path>>(
+        path: P,
+    ) -> Result<(Self, ConfigRepairReport), LoadConfigError> {
+        Self::load_and_repair_from_file_with_retry_opts(path, MAX_IO_RETRIES, IO_RETRY_DELAY).await
+    }
+
+    pub async fn load_from_file_with_retry_opts<P: AsRef<Path>>(
+        path: P,
+        max_retries: usize,
+        retry_delay: std::time::Duration,
+    ) -> Result<Self, LoadConfigError> {
+        let (config, _) = Self::load_and_repair_from_file_with_retry_opts(path, max_retries, retry_delay).await?;
         Ok(config)
+    }
+
+    pub async fn load_from_file_with_retry<P: AsRef<Path>>(path: P) -> Result<Self, LoadConfigError> {
+        Self::load_from_file_with_retry_opts(path, MAX_IO_RETRIES, IO_RETRY_DELAY).await
+    }
+
+    pub async fn load_from_file<P: AsRef<Path>>(path: P) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        match Self::load_from_file_with_retry(path).await {
+            Ok(config) => Ok(config),
+            Err(LoadConfigError::Io(e)) => Err(Box::new(e)),
+            Err(LoadConfigError::Parse(e)) => Err(Box::new(e)),
+            Err(LoadConfigError::IncompatibleStructure(e)) => Err(e.into()),
+            Err(LoadConfigError::Validation(e)) => Err(Box::new(e)),
+        }
     }
 
     pub async fn save_to_file<P: AsRef<Path>>(&self, path: P) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -134,39 +699,333 @@ impl Config {
     }
 
     pub async fn load_or_init<P: AsRef<Path>>(path: P) -> Self {
-        let path = path.as_ref();
-        match tokio::fs::try_exists(path).await {
-            Ok(true) => {
-                match Self::load_from_file(path).await {
-                    Ok(config) => config,
-                    Err(err) => {
-                        eprintln!(
-                            "Fehler beim Laden der Konfiguration von {}: {}. Standardwerte werden verwendet.",
-                            path.display(),
-                            err
-                        );
-                        Self::default()
+        let res = init_config_state(path).await;
+        res.config
+    }
+}
+
+pub async fn init_config_state<P: AsRef<Path>>(config_path: P) -> InitConfigResult {
+    let config_path = config_path.as_ref();
+    let recovery_path = get_recovery_path(config_path);
+
+    let recovery_exists = tokio::fs::try_exists(&recovery_path).await.unwrap_or(false);
+    let config_exists = tokio::fs::try_exists(config_path).await.unwrap_or(false);
+
+    if recovery_exists {
+        match Config::load_and_repair_from_file_with_retry(&recovery_path).await {
+            Ok((rec_cfg, rec_report)) => {
+                if config_exists {
+                    match Config::load_and_repair_from_file_with_retry(config_path).await {
+                        Ok((orig_cfg, orig_report)) => {
+                            if orig_cfg == rec_cfg {
+                                // Identical: automatically resolve recovery state
+                                let _ = tokio::fs::remove_file(&recovery_path).await;
+                                if orig_report.has_repairs() {
+                                    if let Err(save_err) = orig_cfg.save_to_file(config_path).await {
+                                        eprintln!("Fehler beim Speichern der reparierten Konfiguration: {}", save_err);
+                                    }
+                                }
+                                InitConfigResult {
+                                    config: orig_cfg,
+                                    is_recovery_mode: false,
+                                    conflict: None,
+                                    repair_report: if orig_report.is_empty() { None } else { Some(orig_report) },
+                                }
+                            } else {
+                                // Differ: genuine conflict
+                                InitConfigResult {
+                                    config: orig_cfg.clone(),
+                                    is_recovery_mode: false,
+                                    conflict: Some(ConfigConflict {
+                                        original: orig_cfg,
+                                        recovery: rec_cfg,
+                                    }),
+                                    repair_report: if orig_report.is_empty() { None } else { Some(orig_report) },
+                                }
+                            }
+                        }
+                        Err(LoadConfigError::Io(err)) => {
+                            eprintln!(
+                                "Persistent IO-Fehler beim Laden von {}: {}. Recovery-Modus wird aktiviert.",
+                                config_path.display(),
+                                err
+                            );
+                            let event = RecoveryEvent {
+                                event_type: RecoveryEventType::Warning,
+                                title: "Konfiguration aus Sicherung geladen".to_string(),
+                                description: "Die Hauptkonfiguration konnte wegen eines persistenten E/A-Fehlers nicht geladen werden. Die Konfiguration wurde aus der Recovery-Sicherung geladen.".to_string(),
+                                details: Some(RecoveryDetails {
+                                    affected_file: Some(config_path.to_string_lossy().to_string()),
+                                    error_cause: Some(err.to_string()),
+                                    recovery_action: Some("Recovery-Sicherung im Speicher verwendet".to_string()),
+                                    source: Some("Recovery-Sicherungsdatei".to_string()),
+                                    result: Some("Recovery-Modus aktiv".to_string()),
+                                }),
+                            };
+                            InitConfigResult {
+                                config: rec_cfg,
+                                is_recovery_mode: true,
+                                conflict: None,
+                                repair_report: Some(ConfigRepairReport {
+                                    repairs: rec_report.repairs,
+                                    unrecoverable_error: rec_report.unrecoverable_error,
+                                    recovery_event: Some(event),
+                                }),
+                            }
+                        }
+                        Err(err) => {
+                            eprintln!(
+                                "Unwiederherstellbarer Parse-Fehler beim Laden von {}: {}.",
+                                config_path.display(),
+                                err
+                            );
+                            let default_cfg = Config::default();
+                            if default_cfg == rec_cfg {
+                                let _ = rec_cfg.save_to_file(config_path).await;
+                                let _ = tokio::fs::remove_file(&recovery_path).await;
+                                InitConfigResult {
+                                    config: rec_cfg,
+                                    is_recovery_mode: false,
+                                    conflict: None,
+                                    repair_report: Some(ConfigRepairReport {
+                                        repairs: vec![],
+                                        unrecoverable_error: None,
+                                        recovery_event: Some(RecoveryEvent {
+                                            event_type: RecoveryEventType::Success,
+                                            title: "Konfiguration aus Sicherung wiederhergestellt".to_string(),
+                                            description: "Die ursprüngliche Konfigurationsdatei war fehlerhaft und wurde erfolgreich aus der Recovery-Sicherungsdatei wiederhergestellt.".to_string(),
+                                            details: Some(RecoveryDetails {
+                                                affected_file: Some(config_path.to_string_lossy().to_string()),
+                                                error_cause: Some(err.to_string()),
+                                                recovery_action: Some("Aus Recovery-Sicherungsdatei wiederhergestellt".to_string()),
+                                                source: Some("Recovery-Sicherungsdatei".to_string()),
+                                                result: Some("Erfolgreich wiederhergestellt".to_string()),
+                                            }),
+                                        }),
+                                    }),
+                                }
+                            } else {
+                                let unrec_report = ConfigRepairReport {
+                                    repairs: vec![],
+                                    unrecoverable_error: Some(format!("Unrecoverable configuration error: {}", err)),
+                                    recovery_event: Some(RecoveryEvent {
+                                        event_type: RecoveryEventType::Warning,
+                                        title: "Konfigurationskonflikt nach Ladefehler".to_string(),
+                                        description: "Die ursprüngliche Datei konnte nicht geladen werden, während eine abweichende Recovery-Sicherung existiert.".to_string(),
+                                        details: Some(RecoveryDetails {
+                                            affected_file: Some(config_path.to_string_lossy().to_string()),
+                                            error_cause: Some(err.to_string()),
+                                            recovery_action: Some("Konfliktprüfung initiiert".to_string()),
+                                            source: Some("Standardwerte vs. Recovery-Sicherung".to_string()),
+                                            result: Some("Entscheidung erforderlich".to_string()),
+                                        }),
+                                    }),
+                                };
+                                InitConfigResult {
+                                    config: default_cfg.clone(),
+                                    is_recovery_mode: false,
+                                    conflict: Some(ConfigConflict {
+                                        original: default_cfg,
+                                        recovery: rec_cfg,
+                                    }),
+                                    repair_report: Some(unrec_report),
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    // Config file does not exist, but recovery exists
+                    match rec_cfg.save_to_file(config_path).await {
+                        Ok(_) => {
+                            let _ = tokio::fs::remove_file(&recovery_path).await;
+                            InitConfigResult {
+                                config: rec_cfg,
+                                is_recovery_mode: false,
+                                conflict: None,
+                                repair_report: Some(ConfigRepairReport {
+                                    repairs: rec_report.repairs,
+                                    unrecoverable_error: rec_report.unrecoverable_error,
+                                    recovery_event: Some(RecoveryEvent {
+                                        event_type: RecoveryEventType::Success,
+                                        title: "Konfiguration aus Sicherung wiederhergestellt".to_string(),
+                                        description: "Die Konfiguration wurde erfolgreich aus einer vorhandenen Recovery-Sicherungsdatei wiederhergestellt.".to_string(),
+                                        details: Some(RecoveryDetails {
+                                            affected_file: Some(config_path.to_string_lossy().to_string()),
+                                            error_cause: None,
+                                            recovery_action: Some("Aus Recovery-Sicherungsdatei wiederhergestellt und gespeichert".to_string()),
+                                            source: Some("Recovery-Sicherungsdatei".to_string()),
+                                            result: Some("Erfolgreich wiederhergestellt".to_string()),
+                                        }),
+                                    }),
+                                }),
+                            }
+                        }
+                        Err(save_err) => {
+                            InitConfigResult {
+                                config: rec_cfg,
+                                is_recovery_mode: true,
+                                conflict: None,
+                                repair_report: Some(ConfigRepairReport {
+                                    repairs: rec_report.repairs,
+                                    unrecoverable_error: Some(format!("Save error: {}", save_err)),
+                                    recovery_event: Some(RecoveryEvent {
+                                        event_type: RecoveryEventType::Error,
+                                        title: "Wiederherstellung fehlgeschlagen".to_string(),
+                                        description: "Die Konfiguration aus der Recovery-Sicherung konnte nicht in die Hauptdatei geschrieben werden.".to_string(),
+                                        details: Some(RecoveryDetails {
+                                            affected_file: Some(config_path.to_string_lossy().to_string()),
+                                            error_cause: Some(save_err.to_string()),
+                                            recovery_action: Some("Recovery-Modus beibehalten".to_string()),
+                                            source: Some("Recovery-Sicherungsdatei".to_string()),
+                                            result: Some("Recovery-Modus aktiv".to_string()),
+                                        }),
+                                    }),
+                                }),
+                            }
+                        }
                     }
                 }
             }
-            Ok(false) => {
-                let default_config = Self::default();
-                if let Err(err) = default_config.save_to_file(path).await {
-                    eprintln!(
-                        "Fehler beim Erstellen der Standardkonfiguration unter {}: {}",
-                        path.display(),
-                        err
-                    );
+            Err(e) => {
+                eprintln!(
+                    "Fehler beim Laden der Recovery-Datei {}: {}. Recovery-Datei wird entfernt.",
+                    recovery_path.display(),
+                    e
+                );
+                let _ = tokio::fs::remove_file(&recovery_path).await;
+                init_config_without_recovery(config_path, config_exists).await
+            }
+        }
+    } else {
+        init_config_without_recovery(config_path, config_exists).await
+    }
+}
+
+async fn init_config_without_recovery(config_path: &Path, config_exists: bool) -> InitConfigResult {
+    if !config_exists {
+        let default_config = Config::default();
+        if let Err(err) = default_config.save_to_file(config_path).await {
+            eprintln!(
+                "Fehler beim Erstellen der Standardkonfiguration unter {}: {}. Recovery-Modus wird aktiviert.",
+                config_path.display(),
+                err
+            );
+            InitConfigResult {
+                config: default_config,
+                is_recovery_mode: true,
+                conflict: None,
+                repair_report: Some(ConfigRepairReport {
+                    repairs: vec![],
+                    unrecoverable_error: Some(format!("Save error: {}", err)),
+                    recovery_event: Some(RecoveryEvent {
+                        event_type: RecoveryEventType::Error,
+                        title: "Wiederherstellung fehlgeschlagen".to_string(),
+                        description: "Die Standardkonfiguration konnte nicht auf dem Datenträger gespeichert werden.".to_string(),
+                        details: Some(RecoveryDetails {
+                            affected_file: Some(config_path.to_string_lossy().to_string()),
+                            error_cause: Some(err.to_string()),
+                            recovery_action: Some("Standardwerte im Speicher geladen".to_string()),
+                            source: Some("Standardkonfiguration".to_string()),
+                            result: Some("Recovery-Modus aktiviert".to_string()),
+                        }),
+                    }),
+                }),
+            }
+        } else {
+            InitConfigResult {
+                config: default_config,
+                is_recovery_mode: false,
+                conflict: None,
+                repair_report: None,
+            }
+        }
+    } else {
+        match Config::load_and_repair_from_file_with_retry(config_path).await {
+            Ok((config, report)) => {
+                if report.has_repairs() {
+                    if let Err(save_err) = config.save_to_file(config_path).await {
+                        eprintln!("Fehler beim Speichern der reparierten Konfiguration: {}", save_err);
+                    }
                 }
-                default_config
+                InitConfigResult {
+                    config,
+                    is_recovery_mode: false,
+                    conflict: None,
+                    repair_report: if report.is_empty() { None } else { Some(report) },
+                }
+            }
+            Err(LoadConfigError::Io(err)) => {
+                eprintln!(
+                    "Persistenter IO-Fehler beim Laden von {}: {}. Verwende Standardwerte ohne Überschreiben und aktiviere Recovery-Modus.",
+                    config_path.display(),
+                    err
+                );
+                let default_config = Config::default();
+                InitConfigResult {
+                    config: default_config,
+                    is_recovery_mode: true,
+                    conflict: None,
+                    repair_report: Some(ConfigRepairReport {
+                        repairs: vec![],
+                        unrecoverable_error: Some(format!("Persistent IO error: {}", err)),
+                        recovery_event: Some(RecoveryEvent {
+                            event_type: RecoveryEventType::Error,
+                            title: "Wiederherstellung fehlgeschlagen".to_string(),
+                            description: "Die ursprüngliche Konfigurationsdatei konnte wegen eines persistenten E/A-Fehlers nicht geladen werden.".to_string(),
+                            details: Some(RecoveryDetails {
+                                affected_file: Some(config_path.to_string_lossy().to_string()),
+                                error_cause: Some(err.to_string()),
+                                recovery_action: Some("Standardwerte temporär im Speicher aktiviert (Originaldatei nicht überschrieben)".to_string()),
+                                source: Some("Standardkonfiguration (temporär)".to_string()),
+                                result: Some("Recovery-Modus aktiviert".to_string()),
+                            }),
+                        }),
+                    }),
+                }
             }
             Err(err) => {
                 eprintln!(
-                    "Fehler beim Überprüfen der Konfiguration unter {}: {}. Standardwerte werden verwendet.",
-                    path.display(),
+                    "Unwiederherstellbarer Fehler beim Laden von {}: {}. Ersetze mit Standardwerten.",
+                    config_path.display(),
                     err
                 );
-                Self::default()
+                let default_config = Config::default();
+                let mut is_rec = false;
+                let (recovery_action, result_str) = match default_config.save_to_file(config_path).await {
+                    Ok(_) => (
+                        "Neue Standardkonfiguration erstellt und gespeichert".to_string(),
+                        "Standardwerte aktiv und gespeichert".to_string(),
+                    ),
+                    Err(save_err) => {
+                        eprintln!("Fehler beim Speichern der Standardkonfiguration: {}", save_err);
+                        is_rec = true;
+                        (
+                            "Standardwerte als Fallback im Speicher geladen".to_string(),
+                            format!("Fehler beim Speichern ({}). Recovery-Modus aktiv", save_err),
+                        )
+                    }
+                };
+                InitConfigResult {
+                    config: default_config,
+                    is_recovery_mode: is_rec,
+                    conflict: None,
+                    repair_report: Some(ConfigRepairReport {
+                        repairs: vec![],
+                        unrecoverable_error: Some(format!("Unrecoverable configuration error: {}", err)),
+                        recovery_event: Some(RecoveryEvent {
+                            event_type: RecoveryEventType::Warning,
+                            title: "Konfiguration mit Standardwerten wiederhergestellt".to_string(),
+                            description: "Die ursprüngliche Konfigurationsdatei konnte nicht geladen werden. Deshalb wurde eine neue Konfiguration mit den Standardwerten erstellt.".to_string(),
+                            details: Some(RecoveryDetails {
+                                affected_file: Some(config_path.to_string_lossy().to_string()),
+                                error_cause: Some(err.to_string()),
+                                recovery_action: Some(recovery_action),
+                                source: Some("Standardkonfiguration".to_string()),
+                                result: Some(result_str),
+                            }),
+                        }),
+                    }),
+                }
             }
         }
     }
@@ -374,7 +1233,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_load_from_file_invalid_validation() {
+    async fn test_load_from_file_repairs_invalid_validation() {
         let temp_dir = std::env::temp_dir().join(format!("ubtech_test_val_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
         let config_path = temp_dir.join("config.toml");
         tokio::fs::create_dir_all(&temp_dir).await.unwrap();
@@ -388,7 +1247,266 @@ venv = ""
 "#;
         tokio::fs::write(&config_path, invalid_content).await.unwrap();
 
-        assert!(Config::load_from_file(&config_path).await.is_err());
+        let (loaded, report) = Config::load_and_repair_from_file_with_retry(&config_path).await.unwrap();
+        assert_eq!(loaded.mac_address, "00:11:22:33:44:55");
+        assert_eq!(report.repairs.len(), 1);
+        assert_eq!(report.repairs[0].field, "mac_address");
+        assert_eq!(report.repairs[0].repair_method, RepairMethod::DefaultFallback);
+        assert!(!report.repairs[0].success);
+
+        let _ = tokio::fs::remove_dir_all(&temp_dir).await;
+    }
+
+    #[test]
+    fn test_field_level_valid_config_no_repairs() {
+        let toml_content = r#"
+mac_address = "AA:BB:CC:DD:EE:FF"
+default_delay = 750
+default_action_duration = 100
+python_sdk = "/usr/bin/python3"
+workdir = "/home/user/project"
+venv = "/home/user/project/.venv"
+"#;
+        let (config, report) = Config::parse_and_repair(toml_content).unwrap();
+        assert_eq!(config.mac_address, "AA:BB:CC:DD:EE:FF");
+        assert_eq!(config.default_delay, 750);
+        assert_eq!(config.default_action_duration, 100);
+        assert_eq!(config.python_sdk, "/usr/bin/python3");
+        assert_eq!(config.workdir, "/home/user/project");
+        assert_eq!(config.venv, "/home/user/project/.venv");
+        assert!(report.repairs.is_empty());
+        assert!(!report.has_repairs());
+    }
+
+    #[test]
+    fn test_field_level_string_to_integer_conversion() {
+        let toml_content = r#"
+mac_address = "AA:BB:CC:DD:EE:FF"
+default_delay = "750"
+default_action_duration = "100"
+python_sdk = ""
+workdir = ""
+venv = ""
+"#;
+        let (config, report) = Config::parse_and_repair(toml_content).unwrap();
+        assert_eq!(config.default_delay, 750);
+        assert_eq!(config.default_action_duration, 100);
+        assert_eq!(report.repairs.len(), 2);
+        assert_eq!(report.repairs[0].field, "default_delay");
+        assert_eq!(report.repairs[0].original_value, serde_json::json!("750"));
+        assert_eq!(report.repairs[0].resulting_value, serde_json::json!(750));
+        assert_eq!(report.repairs[0].repair_method, RepairMethod::Converted);
+        assert!(report.repairs[0].success);
+
+        assert_eq!(report.repairs[1].field, "default_action_duration");
+        assert_eq!(report.repairs[1].original_value, serde_json::json!("100"));
+        assert_eq!(report.repairs[1].resulting_value, serde_json::json!(100));
+        assert_eq!(report.repairs[1].repair_method, RepairMethod::Converted);
+        assert!(report.repairs[1].success);
+    }
+
+    #[test]
+    fn test_field_level_integer_and_bool_to_string_conversion() {
+        let toml_content = r#"
+mac_address = "00:11:22:33:44:55"
+default_delay = 500
+default_action_duration = 50
+python_sdk = 12345
+workdir = true
+venv = "path"
+"#;
+        let (config, report) = Config::parse_and_repair(toml_content).unwrap();
+        assert_eq!(config.python_sdk, "12345");
+        assert_eq!(config.workdir, "true");
+        assert_eq!(report.repairs.len(), 2);
+
+        assert_eq!(report.repairs[0].field, "python_sdk");
+        assert_eq!(report.repairs[0].original_value, serde_json::json!(12345));
+        assert_eq!(report.repairs[0].resulting_value, serde_json::json!("12345"));
+        assert_eq!(report.repairs[0].repair_method, RepairMethod::Converted);
+        assert!(report.repairs[0].success);
+
+        assert_eq!(report.repairs[1].field, "workdir");
+        assert_eq!(report.repairs[1].original_value, serde_json::json!(true));
+        assert_eq!(report.repairs[1].resulting_value, serde_json::json!("true"));
+        assert_eq!(report.repairs[1].repair_method, RepairMethod::Converted);
+        assert!(report.repairs[1].success);
+    }
+
+    #[test]
+    fn test_field_level_invalid_numeric_string() {
+        let toml_content = r#"
+mac_address = "00:11:22:33:44:55"
+default_delay = 500
+default_action_duration = "invalid"
+python_sdk = ""
+workdir = ""
+venv = ""
+"#;
+        let (config, report) = Config::parse_and_repair(toml_content).unwrap();
+        assert_eq!(config.default_action_duration, 50);
+        assert_eq!(report.repairs.len(), 1);
+        assert_eq!(report.repairs[0].field, "default_action_duration");
+        assert_eq!(report.repairs[0].original_value, serde_json::json!("invalid"));
+        assert_eq!(report.repairs[0].expected_type, "usize");
+        assert_eq!(report.repairs[0].resulting_value, serde_json::json!(50));
+        assert_eq!(report.repairs[0].repair_method, RepairMethod::DefaultFallback);
+        assert!(!report.repairs[0].success);
+    }
+
+    #[test]
+    fn test_field_level_numeric_overflow() {
+        let toml_content = r#"
+mac_address = "00:11:22:33:44:55"
+default_delay = "9999999999999999999999999999999999999999"
+default_action_duration = 50
+python_sdk = ""
+workdir = ""
+venv = ""
+"#;
+        let (config, report) = Config::parse_and_repair(toml_content).unwrap();
+        assert_eq!(config.default_delay, 500);
+        assert_eq!(report.repairs.len(), 1);
+        assert_eq!(report.repairs[0].field, "default_delay");
+        assert_eq!(report.repairs[0].repair_method, RepairMethod::DefaultFallback);
+        assert!(!report.repairs[0].success);
+    }
+
+    #[test]
+    fn test_field_level_negative_values_for_unsigned_fields() {
+        let toml_content = r#"
+mac_address = "00:11:22:33:44:55"
+default_delay = -10
+default_action_duration = "-20"
+python_sdk = ""
+workdir = ""
+venv = ""
+"#;
+        let (config, report) = Config::parse_and_repair(toml_content).unwrap();
+        assert_eq!(config.default_delay, 500);
+        assert_eq!(config.default_action_duration, 50);
+        assert_eq!(report.repairs.len(), 2);
+        assert_eq!(report.repairs[0].field, "default_delay");
+        assert_eq!(report.repairs[0].repair_method, RepairMethod::DefaultFallback);
+        assert_eq!(report.repairs[1].field, "default_action_duration");
+        assert_eq!(report.repairs[1].repair_method, RepairMethod::DefaultFallback);
+    }
+
+    #[test]
+    fn test_field_level_conversion_succeeds_but_fails_validation() {
+        let toml_content = r#"
+mac_address = "00:11:22:33:44:55"
+default_delay = "3000"
+default_action_duration = 50
+python_sdk = ""
+workdir = ""
+venv = ""
+"#;
+        let (config, report) = Config::parse_and_repair(toml_content).unwrap();
+        assert_eq!(config.default_delay, 500);
+        assert_eq!(report.repairs.len(), 1);
+        assert_eq!(report.repairs[0].field, "default_delay");
+        assert_eq!(report.repairs[0].original_value, serde_json::json!("3000"));
+        assert_eq!(report.repairs[0].resulting_value, serde_json::json!(500));
+        assert_eq!(report.repairs[0].repair_method, RepairMethod::DefaultFallback);
+        assert!(!report.repairs[0].success);
+        assert!(report.repairs[0].reason.contains("Standard-Delay muss zwischen 0 und 2000 ms liegen"));
+    }
+
+    #[test]
+    fn test_field_level_missing_required_fields() {
+        let toml_content = r#"
+default_delay = 800
+"#;
+        let (config, report) = Config::parse_and_repair(toml_content).unwrap();
+        assert_eq!(config.default_delay, 800);
+        assert_eq!(config.mac_address, "00:11:22:33:44:55");
+        assert_eq!(config.default_action_duration, 50);
+        assert_eq!(config.python_sdk, "");
+        assert_eq!(config.workdir, "");
+        assert_eq!(config.venv, "");
+
+        assert!(report.repairs.iter().any(|r| r.field == "mac_address" && r.repair_method == RepairMethod::DefaultFallback));
+        assert!(report.repairs.iter().any(|r| r.field == "default_action_duration" && r.repair_method == RepairMethod::DefaultFallback));
+    }
+
+    #[test]
+    fn test_field_level_multiple_invalid_fields_and_preservation() {
+        let toml_content = r#"
+mac_address = "AA:BB:CC:DD:EE:FF"
+default_delay = "750"
+default_action_duration = "invalid"
+python_sdk = "/usr/bin/python3"
+workdir = "/home/user/project"
+venv = "/home/user/project/.venv"
+"#;
+        let (config, report) = Config::parse_and_repair(toml_content).unwrap();
+        assert_eq!(config.mac_address, "AA:BB:CC:DD:EE:FF");
+        assert_eq!(config.default_delay, 750);
+        assert_eq!(config.default_action_duration, 50);
+        assert_eq!(config.python_sdk, "/usr/bin/python3");
+        assert_eq!(config.workdir, "/home/user/project");
+        assert_eq!(config.venv, "/home/user/project/.venv");
+
+        assert_eq!(report.repairs.len(), 2);
+        let delay_rep = report.repairs.iter().find(|r| r.field == "default_delay").unwrap();
+        assert_eq!(delay_rep.repair_method, RepairMethod::Converted);
+        assert!(delay_rep.success);
+
+        let dur_rep = report.repairs.iter().find(|r| r.field == "default_action_duration").unwrap();
+        assert_eq!(dur_rep.repair_method, RepairMethod::DefaultFallback);
+        assert!(!dur_rep.success);
+    }
+
+    #[tokio::test]
+    async fn test_successful_persistence_of_repaired_configuration() {
+        let temp_dir = std::env::temp_dir().join(format!("ubtech_test_persist_rep_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let config_path = temp_dir.join("config.toml");
+        tokio::fs::create_dir_all(&temp_dir).await.unwrap();
+
+        let toml_content = r#"
+mac_address = "AA:BB:CC:DD:EE:FF"
+default_delay = "750"
+default_action_duration = "invalid"
+python_sdk = "/usr/bin/python3"
+workdir = "/home/user/project"
+venv = "/home/user/project/.venv"
+"#;
+        tokio::fs::write(&config_path, toml_content).await.unwrap();
+
+        // Startup init should repair and persist cleanly
+        let init_res = init_config_state(&config_path).await;
+        assert_eq!(init_res.config.mac_address, "AA:BB:CC:DD:EE:FF");
+        assert_eq!(init_res.config.default_delay, 750);
+        assert_eq!(init_res.config.default_action_duration, 50);
+        assert!(init_res.repair_report.is_some());
+
+        // Subsequent startup should load cleanly without new repairs
+        let reloaded_init = init_config_state(&config_path).await;
+        assert_eq!(reloaded_init.config, init_res.config);
+        assert!(reloaded_init.repair_report.is_none());
+
+        let _ = tokio::fs::remove_dir_all(&temp_dir).await;
+    }
+
+    #[tokio::test]
+    async fn test_completely_malformed_toml_triggers_full_recovery() {
+        let temp_dir = std::env::temp_dir().join(format!("ubtech_test_malformed_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let config_path = temp_dir.join("config.toml");
+        tokio::fs::create_dir_all(&temp_dir).await.unwrap();
+
+        tokio::fs::write(&config_path, "totally [ broken [[ toml").await.unwrap();
+
+        let init_res = init_config_state(&config_path).await;
+        assert_eq!(init_res.config, Config::default());
+        assert!(!init_res.is_recovery_mode);
+        assert!(init_res.repair_report.is_some());
+        let report = init_res.repair_report.unwrap();
+        assert!(report.unrecoverable_error.is_some());
+
+        // Verify corrupted file was replaced with defaults
+        let loaded = Config::load_from_file(&config_path).await.unwrap();
+        assert_eq!(loaded, Config::default());
 
         let _ = tokio::fs::remove_dir_all(&temp_dir).await;
     }
@@ -409,8 +1527,8 @@ venv = ""
     }
 
     #[tokio::test]
-    async fn test_load_or_init_preserves_corrupted_file_and_does_not_overwrite() {
-        let temp_dir = std::env::temp_dir().join(format!("ubtech_test_corrupt_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+    async fn test_load_or_init_replaces_corrupted_toml_with_defaults() {
+        let temp_dir = std::env::temp_dir().join(format!("ubtech_test_corrupt_toml_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
         let config_path = temp_dir.join("config.toml");
         tokio::fs::create_dir_all(&temp_dir).await.unwrap();
         let corrupted_content = "corrupted = true [[[invalid";
@@ -419,9 +1537,227 @@ venv = ""
         let loaded = Config::load_or_init(&config_path).await;
         assert_eq!(loaded, Config::default());
 
-        // Ensure the corrupted file was NOT overwritten with default values
+        // Ensure the corrupted file WAS overwritten with default values
         let file_content = tokio::fs::read_to_string(&config_path).await.unwrap();
-        assert_eq!(file_content, corrupted_content);
+        let loaded_file: Config = toml::from_str(&file_content).unwrap();
+        assert_eq!(loaded_file, Config::default());
+
+        let _ = tokio::fs::remove_dir_all(&temp_dir).await;
+    }
+
+    #[tokio::test]
+    async fn test_load_or_init_replaces_invalid_validation_with_defaults() {
+        let temp_dir = std::env::temp_dir().join(format!("ubtech_test_corrupt_val_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let config_path = temp_dir.join("config.toml");
+        tokio::fs::create_dir_all(&temp_dir).await.unwrap();
+        let invalid_content = r#"
+mac_address = "invalid-mac"
+default_delay = 500
+default_action_duration = 50
+python_sdk = ""
+workdir = ""
+venv = ""
+"#;
+        tokio::fs::write(&config_path, invalid_content).await.unwrap();
+
+        let loaded = Config::load_or_init(&config_path).await;
+        assert_eq!(loaded, Config::default());
+
+        let file_content = tokio::fs::read_to_string(&config_path).await.unwrap();
+        let loaded_file: Config = toml::from_str(&file_content).unwrap();
+        assert_eq!(loaded_file, Config::default());
+
+        let _ = tokio::fs::remove_dir_all(&temp_dir).await;
+    }
+
+    #[tokio::test]
+    async fn test_io_error_retries_3_times_with_100ms_delay() {
+        let temp_dir = std::env::temp_dir().join(format!("ubtech_test_retry_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let nonexistent_path = temp_dir.join("nonexistent_config.toml");
+
+        let start = std::time::Instant::now();
+        let result = Config::load_from_file_with_retry(&nonexistent_path).await;
+        let elapsed = start.elapsed();
+
+        assert!(matches!(result, Err(LoadConfigError::Io(_))));
+        // 3 retries with 100ms delay should take at least 300ms
+        assert!(elapsed >= std::time::Duration::from_millis(280), "Expected >= 280ms elapsed, got {:?}", elapsed);
+    }
+
+    #[tokio::test]
+    async fn test_parse_errors_do_not_retry() {
+        let temp_dir = std::env::temp_dir().join(format!("ubtech_test_noretry_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let parse_err_path = temp_dir.join("parse_err.toml");
+        tokio::fs::create_dir_all(&temp_dir).await.unwrap();
+
+        tokio::fs::write(&parse_err_path, "invalid [[[ toml").await.unwrap();
+
+        let start_parse = std::time::Instant::now();
+        let parse_res = Config::load_from_file_with_retry(&parse_err_path).await;
+        let elapsed_parse = start_parse.elapsed();
+        assert!(matches!(parse_res, Err(LoadConfigError::Parse(_))));
+        assert!(elapsed_parse < std::time::Duration::from_millis(80), "Parse error took too long: {:?}", elapsed_parse);
+
+        let _ = tokio::fs::remove_dir_all(&temp_dir).await;
+    }
+
+    #[tokio::test]
+    async fn test_normal_loading_after_transient_io_failure() {
+        let temp_dir = std::env::temp_dir().join(format!("ubtech_test_transient_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let config_path = temp_dir.join("config.toml");
+        tokio::fs::create_dir_all(&temp_dir).await.unwrap();
+
+        let path_clone = config_path.clone();
+        tokio::spawn(async move {
+            // Write valid config after 150ms (during retry 2)
+            tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+            let mut cfg = Config::default();
+            cfg.mac_address = "AA:BB:CC:DD:EE:FF".to_string();
+            cfg.save_to_file(&path_clone).await.unwrap();
+        });
+
+        let loaded = Config::load_from_file_with_retry(&config_path).await;
+        assert!(loaded.is_ok());
+        assert_eq!(loaded.unwrap().mac_address, "AA:BB:CC:DD:EE:FF");
+
+        let _ = tokio::fs::remove_dir_all(&temp_dir).await;
+    }
+
+    #[tokio::test]
+    async fn test_persistent_io_failure_does_not_overwrite_original_file_and_activates_recovery() {
+        let temp_dir = std::env::temp_dir().join(format!("ubtech_test_persist_io_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        // Use a directory path as the config_path to induce a read IO error on read_to_string
+        let config_path = temp_dir.join("config_dir");
+        tokio::fs::create_dir_all(&config_path).await.unwrap();
+
+        let init_res = init_config_state(&config_path).await;
+        assert_eq!(init_res.config, Config::default());
+        assert!(init_res.is_recovery_mode);
+        assert!(init_res.conflict.is_none());
+        // Verify original directory was not deleted/overwritten into a regular file
+        assert!(config_path.is_dir());
+
+        let _ = tokio::fs::remove_dir_all(&temp_dir).await;
+    }
+
+    #[tokio::test]
+    async fn test_recovery_changes_survive_restarts() {
+        let temp_dir = std::env::temp_dir().join(format!("ubtech_test_rec_restart_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let config_path = temp_dir.join("config.toml");
+        let recovery_path = get_recovery_path(&config_path);
+        tokio::fs::create_dir_all(&temp_dir).await.unwrap();
+
+        let mut rec_config = Config::default();
+        rec_config.mac_address = "11:22:33:44:55:66".to_string();
+        rec_config.default_delay = 900;
+        rec_config.save_to_file(&recovery_path).await.unwrap();
+
+        // Simulate app startup when recovery file exists
+        let init_res = init_config_state(&config_path).await;
+        assert_eq!(init_res.config.mac_address, "11:22:33:44:55:66");
+
+        let _ = tokio::fs::remove_dir_all(&temp_dir).await;
+    }
+
+    #[tokio::test]
+    async fn test_identical_configs_auto_resolves_recovery() {
+        let temp_dir = std::env::temp_dir().join(format!("ubtech_test_identical_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let config_path = temp_dir.join("config.toml");
+        let recovery_path = get_recovery_path(&config_path);
+
+        let mut config = Config::default();
+        config.mac_address = "AA:BB:CC:DD:EE:FF".to_string();
+        config.save_to_file(&config_path).await.unwrap();
+        config.save_to_file(&recovery_path).await.unwrap();
+
+        let init_res = init_config_state(&config_path).await;
+        assert_eq!(init_res.config, config);
+        assert!(!init_res.is_recovery_mode);
+        assert!(init_res.conflict.is_none());
+        // Recovery file should be automatically removed
+        assert!(!recovery_path.exists());
+
+        let _ = tokio::fs::remove_dir_all(&temp_dir).await;
+    }
+
+    #[tokio::test]
+    async fn test_conflict_detection_and_both_choices() {
+        let temp_dir = std::env::temp_dir().join(format!("ubtech_test_conflict_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let config_path = temp_dir.join("config.toml");
+        let recovery_path = get_recovery_path(&config_path);
+
+        let mut orig_config = Config::default();
+        orig_config.mac_address = "11:11:11:11:11:11".to_string();
+        orig_config.save_to_file(&config_path).await.unwrap();
+
+        let mut rec_config = Config::default();
+        rec_config.mac_address = "22:22:22:22:22:22".to_string();
+        rec_config.save_to_file(&recovery_path).await.unwrap();
+
+        // 1. Startup detects conflict
+        let state = crate::AppState::init(config_path.clone()).await;
+        let conflict = state.conflict.lock().await.clone();
+        assert!(conflict.is_some());
+        let conflict_val = conflict.unwrap();
+        assert_eq!(conflict_val.original.mac_address, "11:11:11:11:11:11");
+        assert_eq!(conflict_val.recovery.mac_address, "22:22:22:22:22:22");
+
+        // Resolve choosing Recovery
+        let resolved = state.resolve_conflict(crate::app_state::ResolutionChoice::Recovery).await.unwrap();
+        assert_eq!(resolved.mac_address, "22:22:22:22:22:22");
+        assert_eq!(state.settings.lock().await.mac_address, "22:22:22:22:22:22");
+        assert!(!recovery_path.exists());
+        assert!(state.conflict.lock().await.is_none());
+
+        // Verify permanent resolution on disk across restarts
+        let reloaded = crate::AppState::init(config_path.clone()).await;
+        assert_eq!(reloaded.settings.lock().await.mac_address, "22:22:22:22:22:22");
+        assert!(reloaded.conflict.lock().await.is_none());
+
+        // Now test Choice Original
+        rec_config.mac_address = "33:33:33:33:33:33".to_string();
+        rec_config.save_to_file(&recovery_path).await.unwrap();
+
+        let state_orig = crate::AppState::init(config_path.clone()).await;
+        assert!(state_orig.conflict.lock().await.is_some());
+        let resolved_orig = state_orig.resolve_conflict(crate::app_state::ResolutionChoice::Original).await.unwrap();
+        assert_eq!(resolved_orig.mac_address, "22:22:22:22:22:22");
+        assert!(!recovery_path.exists());
+        assert!(state_orig.conflict.lock().await.is_none());
+
+        let _ = tokio::fs::remove_dir_all(&temp_dir).await;
+    }
+
+    #[tokio::test]
+    async fn test_failed_save_preserves_recovery_state() {
+        let temp_dir = std::env::temp_dir().join(format!("ubtech_test_fail_res_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        // Make config_path invalid for writing (directory instead of file)
+        let config_path = temp_dir.join("invalid_dir_config");
+        tokio::fs::create_dir_all(&config_path).await.unwrap();
+        let recovery_path = get_recovery_path(&config_path);
+
+        let mut rec_config = Config::default();
+        rec_config.mac_address = "44:44:44:44:44:44".to_string();
+        rec_config.save_to_file(&recovery_path).await.unwrap();
+
+        let state = crate::AppState::new(
+            Config::default(),
+            config_path.clone(),
+            recovery_path.clone(),
+            true,
+            Some(ConfigConflict {
+                original: Config::default(),
+                recovery: rec_config.clone(),
+            }),
+            None,
+        );
+
+        let res = state.resolve_conflict(crate::app_state::ResolutionChoice::Recovery).await;
+        assert!(res.is_err());
+        // Recovery file should still exist
+        assert!(recovery_path.exists());
+        // Conflict state preserved for retry
+        assert!(state.conflict.lock().await.is_some());
 
         let _ = tokio::fs::remove_dir_all(&temp_dir).await;
     }
@@ -522,6 +1858,78 @@ venv = ""
         }
 
         assert_eq!(file_names, vec!["config.toml"]);
+
+        let _ = tokio::fs::remove_dir_all(&temp_dir).await;
+    }
+
+    #[tokio::test]
+    async fn test_malformed_toml_generates_recovery_event_with_details() {
+        let temp_dir = std::env::temp_dir().join(format!("ubtech_test_ev_malformed_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let config_path = temp_dir.join("config.toml");
+        tokio::fs::create_dir_all(&temp_dir).await.unwrap();
+
+        tokio::fs::write(&config_path, "totally [ broken [[ toml").await.unwrap();
+
+        let init_res = init_config_state(&config_path).await;
+        assert_eq!(init_res.config, Config::default());
+        assert!(!init_res.is_recovery_mode);
+        assert!(init_res.repair_report.is_some());
+        let report = init_res.repair_report.unwrap();
+        assert!(report.recovery_event.is_some());
+        let event = report.recovery_event.unwrap();
+        assert_eq!(event.event_type, RecoveryEventType::Warning);
+        assert_eq!(event.title, "Konfiguration mit Standardwerten wiederhergestellt");
+        assert!(event.details.is_some());
+        let details = event.details.unwrap();
+        assert!(details.affected_file.is_some());
+        assert!(details.error_cause.is_some());
+        assert_eq!(details.source.unwrap(), "Standardkonfiguration");
+
+        let _ = tokio::fs::remove_dir_all(&temp_dir).await;
+    }
+
+    #[tokio::test]
+    async fn test_recovery_from_backup_generates_success_event() {
+        let temp_dir = std::env::temp_dir().join(format!("ubtech_test_ev_backup_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let config_path = temp_dir.join("config.toml");
+        let recovery_path = get_recovery_path(&config_path);
+        tokio::fs::create_dir_all(&temp_dir).await.unwrap();
+
+        let mut rec_cfg = Config::default();
+        rec_cfg.mac_address = "AA:BB:CC:DD:EE:FF".to_string();
+        rec_cfg.save_to_file(&recovery_path).await.unwrap();
+
+        // Config file does not exist, recovery exists
+        let init_res = init_config_state(&config_path).await;
+        assert_eq!(init_res.config.mac_address, "AA:BB:CC:DD:EE:FF");
+        assert!(!init_res.is_recovery_mode);
+        assert!(init_res.repair_report.is_some());
+        let report = init_res.repair_report.unwrap();
+        assert!(report.recovery_event.is_some());
+        let event = report.recovery_event.unwrap();
+        assert_eq!(event.event_type, RecoveryEventType::Success);
+        assert_eq!(event.title, "Konfiguration aus Sicherung wiederhergestellt");
+        assert_eq!(event.details.unwrap().source.unwrap(), "Recovery-Sicherungsdatei");
+
+        let _ = tokio::fs::remove_dir_all(&temp_dir).await;
+    }
+
+    #[tokio::test]
+    async fn test_persistent_io_failure_generates_error_event() {
+        let temp_dir = std::env::temp_dir().join(format!("ubtech_test_ev_io_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let config_path = temp_dir.join("config.toml");
+        // Create directory where file is expected to induce read IO error
+        tokio::fs::create_dir_all(&config_path).await.unwrap();
+
+        let init_res = init_config_state(&config_path).await;
+        assert_eq!(init_res.config, Config::default());
+        assert!(init_res.is_recovery_mode);
+        assert!(init_res.repair_report.is_some());
+        let report = init_res.repair_report.unwrap();
+        assert!(report.recovery_event.is_some());
+        let event = report.recovery_event.unwrap();
+        assert_eq!(event.event_type, RecoveryEventType::Error);
+        assert_eq!(event.title, "Wiederherstellung fehlgeschlagen");
 
         let _ = tokio::fs::remove_dir_all(&temp_dir).await;
     }
