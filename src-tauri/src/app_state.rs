@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use tokio::sync::Mutex;
 use serde::{Deserialize, Serialize};
-use crate::settings::config::{Config as SettingsConfig, ConfigConflict, ConfigRepairReport, get_recovery_path, init_config_state};
+use crate::settings::config::{Config as SettingsConfig, ConfigConflict, ConfigRepairReport, UpdateConfig, get_recovery_path, init_config_state};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -18,8 +18,8 @@ pub struct AppState {
     pub is_recovery_mode: Mutex<bool>,
     pub conflict: Mutex<Option<ConfigConflict>>,
     pub repair_report: Mutex<Option<ConfigRepairReport>>,
-    /// Serialisiert alle Persistenzvorgänge (Speichern, Zurücksetzen, Konfliktlösung),
-    /// damit RAM-Status und TOML-Datei nach jedem Vorgang konsistent bleiben.
+    /// Serializes all persistence operations (save, reset, conflict resolution)
+    /// so that RAM state and TOML file remain consistent after each operation.
     pub persistence_lock: Mutex<()>,
 }
 
@@ -104,6 +104,72 @@ impl AppState {
         *conflict_guard = None;
 
         Ok(selected)
+    }
+
+    /// Saves the updated configuration and updates the in-memory state.
+    /// The persistence lock serializes this operation with other save operations
+    /// so that RAM state and TOML file remain consistent after completion.
+    pub async fn save_settings(&self, update: UpdateConfig) -> Result<SettingsConfig, String> {
+        let _persist = self.persistence_lock.lock().await;
+
+        let is_recovery = *self.is_recovery_mode.lock().await;
+        let target_path = if is_recovery {
+            &self.recovery_path
+        } else {
+            &self.config_path
+        };
+
+        // Work on a clone so the shared in-memory state remains unchanged on failure.
+        let mut settings = {
+            let guard = self.settings.lock().await;
+            guard.clone()
+        };
+
+        // Apply update and validate on the clone — on validation error, return early and
+        // leave the shared state untouched.
+        settings.update(update).map_err(|err| err.to_string())?;
+
+        // Save the modified clone. On IO error, the shared in-memory state is preserved.
+        settings
+            .save_to_file(target_path)
+            .await
+            .map_err(|err| format!("Failed to save configuration: {}", err))?;
+
+        // Only after a successful write, update the shared in-memory state.
+        {
+            let mut guard = self.settings.lock().await;
+            *guard = settings.clone();
+        }
+
+        Ok(settings)
+    }
+
+    /// Resets the configuration to default values and updates the in-memory state.
+    /// The persistence lock serializes this operation with other save operations.
+    pub async fn reset_settings(&self) -> Result<SettingsConfig, String> {
+        let _persist = self.persistence_lock.lock().await;
+
+        let is_recovery = *self.is_recovery_mode.lock().await;
+        let target_path = if is_recovery {
+            &self.recovery_path
+        } else {
+            &self.config_path
+        };
+
+        // Create the default config and save it before modifying the shared state.
+        let default_config = SettingsConfig::default();
+        default_config
+            .save_to_file(target_path)
+            .await
+            .map_err(|err| format!("Failed to save default configuration: {}", err))?;
+
+        // Only after a successful write, update the shared in-memory state.
+        {
+            let mut guard = self.settings.lock().await;
+            *guard = default_config.clone();
+        }
+
+        Ok(default_config)
     }
 }
 
