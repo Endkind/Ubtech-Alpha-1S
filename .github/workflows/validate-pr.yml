@@ -1,0 +1,332 @@
+name: Validate Pull Request
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+  push:
+    branches:
+      - "**"
+    paths:
+      - ".pre-commit-config.yaml"
+      - "src/**"
+      - "src-tauri/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "tsconfig.json"
+
+concurrency:
+  group: pr-validation-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  detect-pr:
+    name: Detect Pull Request
+    runs-on: ubuntu-latest
+    outputs:
+      pr-number: ${{ steps.find-pr.outputs.pr-number }}
+    steps:
+      - name: Find associated pull request
+        id: find-pr
+        if: github.event_name == 'push'
+        run: |
+          PR_NUMBER=$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$BRANCH_NAME" --json number --jq '.[0].number')
+          echo "pr-number=${PR_NUMBER:-}" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BRANCH_NAME: ${{ github.ref_name }}
+      - name: Set empty output for non-push events
+        if: github.event_name != 'push'
+        run: echo "pr-number=" >> "$GITHUB_OUTPUT"
+
+  pre-commit:
+    name: Pre-commit Hooks
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GH_PR_VALIDATION_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Cache pre-commit
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pre-commit
+          key: pre-commit-${{ hashFiles('.pre-commit-config.yaml') }}
+
+      - name: Install pre-commit
+        run: |
+          pip install pre-commit
+          pre-commit install
+
+      - name: Run pre-commit (first pass)
+        id: first-pass
+        run: |
+          EXIT_CODE=0
+          pre-commit run --all-files || EXIT_CODE=$?
+
+          if [ -z "$(git status --porcelain)" ]; then
+            echo "modified=false" >> "$GITHUB_OUTPUT"
+            if [ $EXIT_CODE -ne 0 ]; then
+              echo "Pre-commit failed without modifying files"
+              exit $EXIT_CODE
+            fi
+            echo "Pre-commit passed without modifications"
+          else
+            echo "modified=true" >> "$GITHUB_OUTPUT"
+            echo "Pre-commit modified files, will retry"
+          fi
+
+      - name: Retry pre-commit (second pass)
+        if: steps.first-pass.outputs.modified == 'true'
+        id: second-pass
+        run: |
+          git add -A
+          EXIT_CODE=0
+          pre-commit run --all-files || EXIT_CODE=$?
+
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "second_modified=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "second_modified=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          # Save exit code for later, but don't fail the step yet
+          echo "exit_code=${EXIT_CODE}" >> "$GITHUB_OUTPUT"
+
+          if [ $EXIT_CODE -ne 0 ]; then
+            echo "Second pre-commit execution failed with exit code $EXIT_CODE"
+          else
+            echo "Second pre-commit execution passed"
+          fi
+
+      - name: Commit and push fixes
+        if: steps.first-pass.outputs.modified == 'true' && !cancelled()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # Determine the branch to push to
+          if [ -n "$PR_HEAD_REF" ]; then
+            # PR event - check if it's from the same repo
+            if [ "$PR_HEAD_REPO" != "$CURRENT_REPOSITORY" ]; then
+              echo "PR is from a fork - cannot push automatic fixes"
+              exit 0
+            fi
+            BRANCH="$PR_HEAD_REF"
+          else
+            # Push event - use the current branch
+            BRANCH="$GITHUB_REF_NAME"
+          fi
+
+          # Stage only the files modified by pre-commit
+          git add -A
+
+          # Check if there are actual changes to commit
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+            exit 0
+          fi
+
+          git commit -m "ci: apply pre-commit fixes"
+          git push origin HEAD:"$BRANCH"
+        env:
+          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          CURRENT_REPOSITORY: ${{ github.repository }}
+
+      - name: Check final status
+        if: steps.first-pass.outputs.modified == 'true'
+        run: |
+          if [ "$SECOND_PASS_EXIT_CODE" != "0" ]; then
+            echo "Pre-commit validation failed: second execution returned exit code $SECOND_PASS_EXIT_CODE"
+            exit "$SECOND_PASS_EXIT_CODE"
+          fi
+          echo "Pre-commit validation passed"
+        env:
+          SECOND_PASS_EXIT_CODE: ${{ steps.second-pass.outputs.exit_code }}
+
+  vitest:
+    name: Vitest Tests
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name != 'push' || needs.detect-pr.outputs.pr-number != '' }}
+    needs: detect-pr
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run Vitest
+        run: pnpm test
+
+  rust-tests:
+    name: Rust Unit Tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    if: ${{ github.event_name != 'push' || needs.detect-pr.outputs.pr-number != '' }}
+    needs: detect-pr
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-latest, macos-latest]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install system dependencies (Linux)
+        if: matrix.os == 'ubuntu-24.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libssl-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
+
+      - name: Run Cargo tests
+        run: cargo test --workspace
+        working-directory: src-tauri
+
+  clippy:
+    name: Rust Clippy (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    if: ${{ github.event_name != 'push' || needs.detect-pr.outputs.pr-number != '' }}
+    needs: detect-pr
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-latest, macos-latest]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install system dependencies (Linux)
+        if: matrix.os == 'ubuntu-24.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libssl-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
+
+      - name: Run Clippy
+        run: cargo clippy --workspace -- -D warnings
+        working-directory: src-tauri
+
+  typescript-types:
+    name: TypeScript Type Checking
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name != 'push' || needs.detect-pr.outputs.pr-number != '' }}
+    needs: detect-pr
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Type check
+        run: pnpm exec vue-tsc --noEmit
+
+  frontend-build:
+    name: Frontend Build
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name != 'push' || needs.detect-pr.outputs.pr-number != '' }}
+    needs: detect-pr
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build frontend
+        run: pnpm build

@@ -1,19 +1,18 @@
+pub mod app_state;
+pub mod dialog;
+pub mod path;
+pub mod platform;
 pub mod settings;
 pub mod validator;
-pub mod dialog;
-pub mod platform;
-pub mod path;
-pub mod app_state;
 
-use settings::{
-    get_settings, save_settings, reset_settings,
-    get_config_conflict, resolve_config_conflict, is_recovery_mode,
-    get_repair_report, dismiss_repair_report,
-};
-use dialog::{pick_file, pick_directory};
-use platform::get_family;
-use path::{path_dirname, path_join, path_basename, path_is_absolute};
 use crate::app_state::AppState;
+use dialog::{pick_directory, pick_file};
+use path::{path_basename, path_dirname, path_is_absolute, path_join};
+use platform::get_family;
+use settings::{
+    dismiss_repair_report, get_config_conflict, get_repair_report, get_settings, is_recovery_mode,
+    reset_settings, resolve_config_conflict, save_settings,
+};
 use tauri::Manager;
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/

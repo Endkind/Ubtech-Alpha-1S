@@ -1,7 +1,10 @@
+use crate::settings::config::{
+    Config as SettingsConfig, ConfigConflict, ConfigRepairReport, UpdateConfig, get_recovery_path,
+    init_config_state,
+};
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use tokio::sync::Mutex;
-use serde::{Deserialize, Serialize};
-use crate::settings::config::{Config as SettingsConfig, ConfigConflict, ConfigRepairReport, UpdateConfig, get_recovery_path, init_config_state};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -57,7 +60,10 @@ impl AppState {
         }
     }
 
-    pub async fn resolve_conflict(&self, choice: ResolutionChoice) -> Result<SettingsConfig, String> {
+    pub async fn resolve_conflict(
+        &self,
+        choice: ResolutionChoice,
+    ) -> Result<SettingsConfig, String> {
         // Persistence-Lock serialisiert diesen Vorgang mit save_settings / reset_settings.
         let _persist = self.persistence_lock.lock().await;
         let mut conflict_guard = self.conflict.lock().await;
@@ -70,13 +76,18 @@ impl AppState {
                 ResolutionChoice::Recovery => conflict.recovery.clone(),
             },
             None => {
-                if tokio::fs::try_exists(&self.recovery_path).await.unwrap_or(false) {
+                if tokio::fs::try_exists(&self.recovery_path)
+                    .await
+                    .unwrap_or(false)
+                {
                     match choice {
                         ResolutionChoice::Original => settings_guard.clone(),
                         ResolutionChoice::Recovery => {
                             SettingsConfig::load_from_file_with_retry(&self.recovery_path)
                                 .await
-                                .map_err(|e| format!("Fehler beim Laden der Recovery-Konfiguration: {}", e))?
+                                .map_err(|e| {
+                                    format!("Fehler beim Laden der Recovery-Konfiguration: {}", e)
+                                })?
                         }
                     }
                 } else {
@@ -89,10 +100,18 @@ impl AppState {
         selected
             .save_to_file(&self.config_path)
             .await
-            .map_err(|err| format!("Fehler beim Speichern der ausgewählten Konfiguration: {}", err))?;
+            .map_err(|err| {
+                format!(
+                    "Fehler beim Speichern der ausgewählten Konfiguration: {}",
+                    err
+                )
+            })?;
 
         // 2. Remove recovery file ONLY after saving succeeded
-        if tokio::fs::try_exists(&self.recovery_path).await.unwrap_or(false) {
+        if tokio::fs::try_exists(&self.recovery_path)
+            .await
+            .unwrap_or(false)
+        {
             tokio::fs::remove_file(&self.recovery_path)
                 .await
                 .map_err(|err| format!("Fehler beim Löschen der Recovery-Datei: {}", err))?;

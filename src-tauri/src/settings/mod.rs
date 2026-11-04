@@ -1,7 +1,7 @@
-use tauri::State;
 use crate::AppState;
 use crate::app_state::ResolutionChoice;
 use crate::settings::config::{Config, ConfigConflict, ConfigRepairReport, UpdateConfig};
+use tauri::State;
 
 pub mod config;
 
@@ -25,7 +25,9 @@ pub async fn reset_settings(state: State<'_, AppState>) -> Result<Config, String
 }
 
 #[tauri::command]
-pub async fn get_config_conflict(state: State<'_, AppState>) -> Result<Option<ConfigConflict>, String> {
+pub async fn get_config_conflict(
+    state: State<'_, AppState>,
+) -> Result<Option<ConfigConflict>, String> {
     let conflict = state.conflict.lock().await;
     Ok(conflict.clone())
 }
@@ -45,7 +47,9 @@ pub async fn is_recovery_mode(state: State<'_, AppState>) -> Result<bool, String
 }
 
 #[tauri::command]
-pub async fn get_repair_report(state: State<'_, AppState>) -> Result<Option<ConfigRepairReport>, String> {
+pub async fn get_repair_report(
+    state: State<'_, AppState>,
+) -> Result<Option<ConfigRepairReport>, String> {
     let report = state.repair_report.lock().await;
     Ok(report.clone())
 }
@@ -65,7 +69,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_save_settings_in_recovery_mode_writes_to_recovery_file() {
-        let temp_dir = std::env::temp_dir().join(format!("ubtech_test_mod_rec_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let temp_dir = std::env::temp_dir().join(format!(
+            "ubtech_test_mod_rec_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
         let config_path = temp_dir.join("config.toml");
         let recovery_path = get_recovery_path(&config_path);
 
@@ -110,7 +120,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_conflict_resolution_updates_in_memory_and_removes_recovery_file() {
-        let temp_dir = std::env::temp_dir().join(format!("ubtech_test_mod_conflict_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let temp_dir = std::env::temp_dir().join(format!(
+            "ubtech_test_mod_conflict_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
         let config_path = temp_dir.join("config.toml");
         let recovery_path = get_recovery_path(&config_path);
 
@@ -125,7 +141,10 @@ mod tests {
         let state = AppState::init(config_path.clone()).await;
         assert!(state.conflict.lock().await.is_some());
 
-        let res = state.resolve_conflict(ResolutionChoice::Recovery).await.unwrap();
+        let res = state
+            .resolve_conflict(ResolutionChoice::Recovery)
+            .await
+            .unwrap();
         assert_eq!(res.mac_address, "99:88:77:66:55:44");
         assert_eq!(state.settings.lock().await.mac_address, "99:88:77:66:55:44");
         assert!(!recovery_path.exists());
@@ -135,7 +154,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_save_settings_success_updates_ram_and_disk() {
-        let temp_dir = std::env::temp_dir().join(format!("ubtech_test_mod_save_ok_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let temp_dir = std::env::temp_dir().join(format!(
+            "ubtech_test_mod_save_ok_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
         let config_path = temp_dir.join("config.toml");
         let recovery_path = get_recovery_path(&config_path);
 
@@ -177,7 +202,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_save_settings_validation_error_preserves_ram() {
-        let temp_dir = std::env::temp_dir().join(format!("ubtech_test_mod_save_val_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let temp_dir = std::env::temp_dir().join(format!(
+            "ubtech_test_mod_save_val_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
         let config_path = temp_dir.join("config.toml");
         let recovery_path = get_recovery_path(&config_path);
 
@@ -220,7 +251,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_reset_settings_success_updates_ram_and_disk() {
-        let temp_dir = std::env::temp_dir().join(format!("ubtech_test_mod_reset_ok_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let temp_dir = std::env::temp_dir().join(format!(
+            "ubtech_test_mod_reset_ok_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
         let config_path = temp_dir.join("config.toml");
         let recovery_path = get_recovery_path(&config_path);
 
@@ -256,7 +293,13 @@ mod tests {
     /// RAM status and TOML file remain consistent after all calls complete.
     #[tokio::test]
     async fn test_concurrent_save_settings_serialized() {
-        let temp_dir = std::env::temp_dir().join(format!("ubtech_test_mod_concurrent_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let temp_dir = std::env::temp_dir().join(format!(
+            "ubtech_test_mod_concurrent_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
         let config_path = temp_dir.join("config.toml");
         let recovery_path = get_recovery_path(&config_path);
 
@@ -278,7 +321,10 @@ mod tests {
         for i in 0..10u32 {
             let state = state.clone();
             let handle = tokio::spawn(async move {
-                let mac = format!("{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}", i, i, i, i, i, i);
+                let mac = format!(
+                    "{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
+                    i, i, i, i, i, i
+                );
                 let update = UpdateConfig {
                     mac_address: Some(mac),
                     default_delay: None,
@@ -295,18 +341,25 @@ mod tests {
         }
 
         // Wait for all calls — tokio::spawn returns Result<T, JoinError>.
-        let results: Vec<Result<Result<Config, String>, _>> = futures::future::join_all(handles).await;
+        let results: Vec<Result<Result<Config, String>, _>> =
+            futures::future::join_all(handles).await;
 
         // All calls should be successful.
         let success_count = results.iter().filter(|r| matches!(r, Ok(Ok(_)))).count();
-        assert!(success_count > 0, "At least one save_settings call should succeed");
+        assert!(
+            success_count > 0,
+            "At least one save_settings call should succeed"
+        );
 
         // After all calls complete, RAM and file must have the same MAC value.
         let ram_mac = {
             let guard = state.settings.lock().await;
             guard.mac_address.clone()
         };
-        let disk_mac = Config::load_from_file(&config_path).await.unwrap().mac_address;
+        let disk_mac = Config::load_from_file(&config_path)
+            .await
+            .unwrap()
+            .mac_address;
 
         assert_eq!(
             ram_mac, disk_mac,
@@ -320,7 +373,13 @@ mod tests {
     /// and RAM and file remain consistent after completion.
     #[tokio::test]
     async fn test_save_and_reset_serialized() {
-        let temp_dir = std::env::temp_dir().join(format!("ubtech_test_mod_save_reset_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let temp_dir = std::env::temp_dir().join(format!(
+            "ubtech_test_mod_save_reset_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
         let config_path = temp_dir.join("config.toml");
         let recovery_path = get_recovery_path(&config_path);
 
@@ -343,7 +402,10 @@ mod tests {
         for i in 0..5u32 {
             let state = state.clone();
             let handle = tokio::spawn(async move {
-                let mac = format!("{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}", i, i, i, i, i, i);
+                let mac = format!(
+                    "{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
+                    i, i, i, i, i, i
+                );
                 let update = UpdateConfig {
                     mac_address: Some(mac),
                     default_delay: None,
@@ -375,7 +437,10 @@ mod tests {
             let guard = state.settings.lock().await;
             guard.mac_address.clone()
         };
-        let disk_mac = Config::load_from_file(&config_path).await.unwrap().mac_address;
+        let disk_mac = Config::load_from_file(&config_path)
+            .await
+            .unwrap()
+            .mac_address;
 
         assert_eq!(
             ram_mac, disk_mac,

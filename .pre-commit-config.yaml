@@ -8,3 +8,14 @@ repos:
       - id: check-yaml
       - id: check-added-large-files
         exclude: (?i)\.(png|jpe?g|gif|webp|ico|svg|bmp|tiff?)$
+      - id: check-merge-conflict
+      - id: check-case-conflict
+
+  - repo: local
+    hooks:
+      - id: cargo-fmt
+        name: Rust Formatting (cargo fmt)
+        entry: bash -c 'cd src-tauri && cargo fmt --all'
+        language: system
+        types: [rust]
+        pass_filenames: false

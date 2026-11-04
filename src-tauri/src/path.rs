@@ -70,16 +70,28 @@ mod tests {
 
         #[cfg(windows)]
         {
-            assert_eq!(path_dirname(r"C:\Projekte\sdk\main.py".to_string()), r"C:\Projekte\sdk");
+            assert_eq!(
+                path_dirname(r"C:\Projekte\sdk\main.py".to_string()),
+                r"C:\Projekte\sdk"
+            );
             assert_eq!(path_dirname(r"C:\main.py".to_string()), r"C:\");
             assert_eq!(path_dirname(r"C:\".to_string()), r"C:\");
-            assert_eq!(path_dirname(r"\\server\share\folder\main.py".to_string()), r"\\server\share\folder");
-            assert_eq!(path_dirname(r"\\server\share\main.py".to_string()), r"\\server\share\");
+            assert_eq!(
+                path_dirname(r"\\server\share\folder\main.py".to_string()),
+                r"\\server\share\folder"
+            );
+            assert_eq!(
+                path_dirname(r"\\server\share\main.py".to_string()),
+                r"\\server\share\"
+            );
         }
 
         #[cfg(not(windows))]
         {
-            assert_eq!(path_dirname("/home/user/sdk/main.py".to_string()), "/home/user/sdk");
+            assert_eq!(
+                path_dirname("/home/user/sdk/main.py".to_string()),
+                "/home/user/sdk"
+            );
             assert_eq!(path_dirname("/main.py".to_string()), "/");
             assert_eq!(path_dirname("/".to_string()), "/");
         }
@@ -92,19 +104,54 @@ mod tests {
 
         #[cfg(windows)]
         {
-            assert_eq!(path_join(vec![r"C:\Projekte\sdk".to_string(), "main.py".to_string()]), r"C:\Projekte\sdk\main.py");
-            assert_eq!(path_join(vec![r"C:\".to_string(), "main.py".to_string()]), r"C:\main.py");
-            assert_eq!(path_join(vec![r"C:\".to_string(), ".venv".to_string()]), r"C:\.venv");
-            assert_eq!(path_join(vec![r"C:\workspace".to_string(), "project".to_string(), "src".to_string()]), r"C:\workspace\project\src");
-            assert_eq!(path_join(vec![r"\\server\share".to_string(), "main.py".to_string()]), r"\\server\share\main.py");
+            assert_eq!(
+                path_join(vec![r"C:\Projekte\sdk".to_string(), "main.py".to_string()]),
+                r"C:\Projekte\sdk\main.py"
+            );
+            assert_eq!(
+                path_join(vec![r"C:\".to_string(), "main.py".to_string()]),
+                r"C:\main.py"
+            );
+            assert_eq!(
+                path_join(vec![r"C:\".to_string(), ".venv".to_string()]),
+                r"C:\.venv"
+            );
+            assert_eq!(
+                path_join(vec![
+                    r"C:\workspace".to_string(),
+                    "project".to_string(),
+                    "src".to_string()
+                ]),
+                r"C:\workspace\project\src"
+            );
+            assert_eq!(
+                path_join(vec![r"\\server\share".to_string(), "main.py".to_string()]),
+                r"\\server\share\main.py"
+            );
         }
 
         #[cfg(not(windows))]
         {
-            assert_eq!(path_join(vec!["/home/user/sdk".to_string(), "main.py".to_string()]), "/home/user/sdk/main.py");
-            assert_eq!(path_join(vec!["/".to_string(), "main.py".to_string()]), "/main.py");
-            assert_eq!(path_join(vec!["/".to_string(), ".venv".to_string()]), "/.venv");
-            assert_eq!(path_join(vec!["/workspace".to_string(), "project".to_string(), "src".to_string()]), "/workspace/project/src");
+            assert_eq!(
+                path_join(vec!["/home/user/sdk".to_string(), "main.py".to_string()]),
+                "/home/user/sdk/main.py"
+            );
+            assert_eq!(
+                path_join(vec!["/".to_string(), "main.py".to_string()]),
+                "/main.py"
+            );
+            assert_eq!(
+                path_join(vec!["/".to_string(), ".venv".to_string()]),
+                "/.venv"
+            );
+            assert_eq!(
+                path_join(vec![
+                    "/workspace".to_string(),
+                    "project".to_string(),
+                    "src".to_string()
+                ]),
+                "/workspace/project/src"
+            );
         }
     }
 
@@ -115,13 +162,19 @@ mod tests {
 
         #[cfg(windows)]
         {
-            assert_eq!(path_basename(r"C:\Projekte\sdk\main.py".to_string()), "main.py");
+            assert_eq!(
+                path_basename(r"C:\Projekte\sdk\main.py".to_string()),
+                "main.py"
+            );
             assert_eq!(path_basename(r"C:\Projekte\sdk".to_string()), "sdk");
         }
 
         #[cfg(not(windows))]
         {
-            assert_eq!(path_basename("/home/user/sdk/main.py".to_string()), "main.py");
+            assert_eq!(
+                path_basename("/home/user/sdk/main.py".to_string()),
+                "main.py"
+            );
             assert_eq!(path_basename("/home/user/sdk".to_string()), "sdk");
         }
     }
