@@ -4,7 +4,7 @@ This document describes the GitHub Actions CI pipeline for validating pull reque
 
 ## Overview
 
-The `Validate Pull Request` workflow (`.github/workflows/validate-pr.yml`) automatically validates pull requests before they can be merged. It runs multiple independent validation jobs in parallel.
+The `Validate Pull Request` workflow (`.github/workflows/validate-pr.yml`) automatically validates pull requests before they can be merged. It runs multiple independent validation jobs in parallel and produces **10 required status checks** that can be enforced via branch protection rules.
 
 ## Validation Jobs
 
@@ -126,7 +126,9 @@ This prevents the workflow from running on unrelated pushes (e.g., documentation
 
 ## Branch Protection Rules
 
-To enforce PR validation, configure the following required status checks in your branch protection rules or rulesets:
+To enforce PR validation, configure the following **10 required status checks** in your branch protection rules or rulesets:
+
+These checks are produced by 6 jobs, where `rust-tests` and `clippy` each run on 3 platforms via a matrix, resulting in 10 independent status checks that GitHub Actions reports separately.
 
 1. `Pre-commit Hooks`
 2. `Vitest Tests`
