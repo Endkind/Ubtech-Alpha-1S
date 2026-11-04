@@ -10,14 +10,33 @@ The `Validate Pull Request` workflow (`.github/workflows/validate-pr.yml`) autom
 
 The following jobs run independently and in parallel:
 
-| Job ID | Display Name | Description |
-|--------|-------------|-------------|
-| `pre-commit` | Pre-commit Hooks | Runs all configured pre-commit hooks with automatic fix and retry |
-| `vitest` | Vitest Tests | Runs all Vitest tests in CI mode |
-| `rust-tests` | Rust Unit Tests | Executes Rust unit tests using Cargo |
-| `clippy` | Rust Clippy | Runs Clippy linter with warnings as errors |
-| `typescript-types` | TypeScript Type Checking | Runs `vue-tsc --noEmit` for type checking |
-| `frontend-build` | Frontend Build | Builds the frontend to verify it compiles |
+| Job ID | Display Name | Platforms | Description |
+|--------|-------------|-----------|-------------|
+| `pre-commit` | Pre-commit Hooks | Linux | Runs all configured pre-commit hooks with automatic fix and retry |
+| `vitest` | Vitest Tests | Linux | Runs all Vitest tests in CI mode |
+| `rust-tests` | Rust Unit Tests | Linux, Windows, macOS | Executes Rust unit tests using Cargo on all three platforms |
+| `clippy` | Rust Clippy | Linux, Windows, macOS | Runs Clippy linter with warnings as errors on all three platforms |
+| `typescript-types` | TypeScript Type Checking | Linux | Runs `vue-tsc --noEmit` for type checking |
+| `frontend-build` | Frontend Build | Linux | Builds the frontend to verify it compiles |
+
+### Cross-Platform Matrix Jobs
+
+The `rust-tests` and `clippy` jobs use a GitHub Actions matrix to run on three operating systems:
+
+- **Linux:** `ubuntu-24.04` — includes Tauri system dependencies (WebKit2GTK, GTK3, etc.)
+- **Windows:** `windows-latest` — uses WebView2 (pre-installed)
+- **macOS:** `macos-latest` — uses WebKit (pre-installed)
+
+Each matrix combination produces an independent status check in GitHub Actions. A failure on any platform causes the corresponding job to fail.
+
+### Platform-Independent Jobs
+
+The following jobs run on a single platform (Linux) as they are platform-independent:
+
+- **Pre-commit Hooks:** Code formatting and linting are consistent across platforms
+- **Vitest Tests:** Frontend tests run in Node.js, which is platform-agnostic
+- **TypeScript Type Checking:** Type checking is platform-independent
+- **Frontend Build:** Vite build is platform-independent
 
 ### Pre-commit Hooks
 
@@ -111,10 +130,14 @@ To enforce PR validation, configure the following required status checks in your
 
 1. `Pre-commit Hooks`
 2. `Vitest Tests`
-3. `Rust Unit Tests`
-4. `Rust Clippy`
-5. `TypeScript Type Checking`
-6. `Frontend Build`
+3. `Rust Unit Tests (ubuntu-24.04)`
+4. `Rust Unit Tests (windows-latest)`
+5. `Rust Unit Tests (macos-latest)`
+6. `Rust Clippy (ubuntu-24.04)`
+7. `Rust Clippy (windows-latest)`
+8. `Rust Clippy (macos-latest)`
+9. `TypeScript Type Checking`
+10. `Frontend Build`
 
 ### Configuring via GitHub UI
 
@@ -128,7 +151,7 @@ To enforce PR validation, configure the following required status checks in your
 ```bash
 gh api repos/{owner}/{repo}/branches/{branch}/protection \
   --method PUT \
-  --field required_status_checks='{"strict":true,"contexts":["Pre-commit Hooks","Vitest Tests","Rust Unit Tests","Rust Clippy","TypeScript Type Checking","Frontend Build"]}' \
+  --field required_status_checks='{"strict":true,"contexts":["Pre-commit Hooks","Vitest Tests","Rust Unit Tests (ubuntu-24.04)","Rust Unit Tests (windows-latest)","Rust Unit Tests (macos-latest)","Rust Clippy (ubuntu-24.04)","Rust Clippy (windows-latest)","Rust Clippy (macos-latest)","TypeScript Type Checking","Frontend Build"]}' \
   --field enforce_admins=true \
   --field restrictions=null
 ```
@@ -148,7 +171,7 @@ Or use the `workflow_dispatch` trigger from the Actions tab.
 The workflow uses the following caches to speed up execution:
 
 - **Pre-commit:** `~/.cache/pre-commit` keyed by `.pre-commit-config.yaml` hash
-- **Rust:** `Swatinem/rust-cache@v2` for Cargo dependencies
+- **Rust:** `Swatinem/rust-cache@v2` for Cargo dependencies — cache keys are OS-specific, so each platform (Linux, Windows, macOS) maintains its own cache
 - **Node.js:** `actions/setup-node@v4` with pnpm cache
 
 ## Fork Pull Request Security
@@ -175,5 +198,5 @@ This ensures only the latest commit is validated.
 
 1. **Fork PRs:** Automatic pre-commit fixes cannot be pushed to fork branches. Contributors must apply fixes locally.
 2. **Workflow retriggering:** Without `GH_PR_VALIDATION_TOKEN`, the workflow won't re-run after pre-commit pushes fixes. The previous successful run may still appear as passing.
-3. **Rust build:** The workflow runs tests and linting but does not perform a full Tauri build, as that requires platform-specific dependencies and is covered by the release workflow.
+3. **Rust build:** The workflow runs tests and linting on all three platforms but does not perform a full Tauri build, as that requires platform-specific dependencies and is covered by the release workflow.
 4. **ESLint/Prettier:** No ESLint or Prettier configuration exists in this project. If added in the future, they can be integrated into pre-commit hooks.

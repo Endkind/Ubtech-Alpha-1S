@@ -190,10 +190,14 @@ jobs:
         run: pnpm test
 
   rust-tests:
-    name: Rust Unit Tests
-    runs-on: ubuntu-latest
+    name: Rust Unit Tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     if: ${{ github.event_name != 'push' || needs.detect-pr.outputs.pr-number != '' }}
     needs: detect-pr
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-latest, macos-latest]
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -206,15 +210,34 @@ jobs:
         with:
           workspaces: src-tauri
 
+      - name: Install system dependencies (Linux)
+        if: matrix.os == 'ubuntu-24.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libssl-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
+
       - name: Run Cargo tests
         run: cargo test --workspace
         working-directory: src-tauri
 
   clippy:
-    name: Rust Clippy
-    runs-on: ubuntu-latest
+    name: Rust Clippy (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     if: ${{ github.event_name != 'push' || needs.detect-pr.outputs.pr-number != '' }}
     needs: detect-pr
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-latest, macos-latest]
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -228,6 +251,21 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+
+      - name: Install system dependencies (Linux)
+        if: matrix.os == 'ubuntu-24.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libssl-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
 
       - name: Run Clippy
         run: cargo clippy --workspace -- -D warnings
