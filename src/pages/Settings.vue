@@ -35,7 +35,6 @@
   const is_saving = ref<boolean>(false);
 
   const resetDialog = useTemplateRef<HTMLDialogElement>('reset-dialog');
-  const is_reset_modal_open = ref<boolean>(false);
   const is_resetting = ref<boolean>(false);
   const reset_success = ref<boolean>(false);
 
@@ -166,13 +165,11 @@
   }
 
   function openResetModal() {
-    is_reset_modal_open.value = true;
     resetDialog.value?.showModal();
   }
 
   function closeResetModal() {
     if (is_resetting.value) return;
-    is_reset_modal_open.value = false;
     resetDialog.value?.close();
   }
 
@@ -180,13 +177,6 @@
     if (is_resetting.value) {
       event.preventDefault();
       return;
-    }
-    is_reset_modal_open.value = false;
-  }
-
-  function handleResetDialogClose() {
-    if (!is_resetting.value) {
-      is_reset_modal_open.value = false;
     }
   }
 
@@ -203,7 +193,6 @@
       venv.value = settings.venv;
 
       resetDialog.value?.close();
-      is_reset_modal_open.value = false;
       reset_success.value = true;
       setTimeout(() => {
         reset_success.value = false;
@@ -519,7 +508,6 @@
       ref="reset-dialog"
       class="modal"
       @cancel="handleResetDialogCancel"
-      @close="handleResetDialogClose"
     >
       <div class="modal-box">
         <h3 class="text-lg font-bold flex items-center gap-2 text-error">
