@@ -15,10 +15,12 @@
       type?: RecoveryEventType;
       title: string;
       description?: string;
+      required?: boolean;
     }>(),
     {
       type: "info",
       description: "",
+      required: false,
     }
   );
 
@@ -40,10 +42,12 @@
   );
 
   function handleCancel() {
+    if (props.required) return;
     emit('close');
   }
 
   function handleClose() {
+    if (props.required) return;
     emit('close');
   }
 
@@ -94,12 +98,14 @@
   <dialog
     ref="config-dialog"
     class="modal z-50"
+    :class="{ 'modal-backdrop:hidden': props.required }"
     @cancel="handleCancel"
     @close="handleClose"
   >
     <div class="modal-box max-w-3xl border shadow-2xl relative bg-base-100" :class="borderClass">
-      <!-- Close button (top right) -->
+      <!-- Close button (top right) - hidden for required dialogs -->
       <button
+        v-if="!props.required"
         type="button"
         class="btn btn-ghost btn-sm btn-circle absolute right-4 top-4"
         aria-label="Schließen"

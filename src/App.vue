@@ -230,7 +230,7 @@
     type="warning"
     title="Konfigurationskonflikt erkannt"
     description="Aufgrund vorheriger Wiederherstellungsmaßnahmen existiert eine abweichende Recovery-Konfiguration. Bitte wähle, welche Konfiguration dauerhaft beibehalten werden soll:"
-    @close="conflict = null"
+    required
   >
     <div v-if="conflict" class="grid grid-cols-1 md:grid-cols-2 gap-4 my-3 text-xs font-mono">
       <div class="p-3 bg-base-200 rounded-box border border-base-300 space-y-1">
