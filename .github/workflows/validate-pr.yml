@@ -34,7 +34,7 @@ jobs:
         id: find-pr
         if: github.event_name == 'push'
         run: |
-          PR_NUMBER=$(gh pr list --head "${{ github.ref_name }}" --json number --jq '.[0].number')
+          PR_NUMBER=$(gh pr list --repo "$GITHUB_REPOSITORY" --head "${{ github.ref_name }}" --json number --jq '.[0].number')
           echo "pr-number=${PR_NUMBER:-}" >> "$GITHUB_OUTPUT"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
