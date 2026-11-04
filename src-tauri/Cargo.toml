@@ -22,10 +22,12 @@ tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+toml = "0.8"
 validator = { version = "0.21.0", features = ["derive"] }
 regex = "1"
 rfd = "0.15"
-
+tokio = { version = "1", features = ["fs", "sync", "macros", "rt", "io-util", "time"] }
+futures = "0.3"
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
 [profile.release]

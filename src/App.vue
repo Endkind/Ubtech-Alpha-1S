@@ -2,6 +2,7 @@
   import { PAGES } from "@ts/pages.ts";
   import { computed, onMounted, ref } from "vue";
   import { getVersion } from "@tauri-apps/api/app";
+  import { invoke } from "@tauri-apps/api/core";
   import { openUrl } from "@tauri-apps/plugin-opener";
   import pkg from "../package.json";
   import About from "@pages/About.vue";
@@ -9,7 +10,11 @@
   import Home from "@pages/Home.vue";
   import Editor from "@pages/Editor.vue";
   import Library from "@pages/Library.vue";
+  import ConfigDialog from "./components/ConfigDialog.vue";
   import { usePagesStore } from "@stores/pages.ts";
+  import type { ConfigConflict, ResolutionChoice, ConfigRepairReport } from "@ts/schemas/config.ts";
+  import { resolveReportProperties } from "@ts/utils/config_dialog.ts";
+  import { CheckIcon } from "@heroicons/vue/24/outline";
 
   const pages_store = usePagesStore();
 
@@ -19,6 +24,66 @@
     () => `https://github.com/Endkind/Ubtech-Alpha-1S/releases/tag/${releaseTag.value}`
   );
 
+  const conflict = ref<ConfigConflict | null>(null);
+  const is_resolving = ref<boolean>(false);
+  const resolve_error = ref<string | null>(null);
+
+  const repair_report = ref<ConfigRepairReport | null>(null);
+
+  const reportProps = computed(() =>
+    resolveReportProperties(repair_report.value, conflict.value !== null)
+  );
+
+  async function checkConflict() {
+    try {
+      const res = await invoke<ConfigConflict | null>("get_config_conflict");
+      if (res && res.original && res.recovery) {
+        conflict.value = res;
+      } else {
+        conflict.value = null;
+      }
+    } catch (error) {
+      console.error("Fehler beim Prüfen von Konfigurationskonflikten:", error);
+    }
+  }
+
+  async function checkRepairReport() {
+    try {
+      const res = await invoke<ConfigRepairReport | null>("get_repair_report");
+      if (res && ((res.repairs && res.repairs.length > 0) || res.unrecoverable_error || res.recovery_event)) {
+        repair_report.value = res;
+      } else {
+        repair_report.value = null;
+      }
+    } catch (error) {
+      console.error("Fehler beim Abrufen des Reparaturberichts:", error);
+    }
+  }
+
+  async function dismissRepairReport() {
+    try {
+      await invoke("dismiss_repair_report");
+    } catch (error) {
+      console.error("Fehler beim Schließen des Reparaturberichts:", error);
+    } finally {
+      repair_report.value = null;
+    }
+  }
+
+  async function resolveConflict(choice: ResolutionChoice) {
+    is_resolving.value = true;
+    resolve_error.value = null;
+    try {
+      await invoke("resolve_config_conflict", { choice });
+      conflict.value = null;
+    } catch (error) {
+      console.error("Fehler beim Auflösen des Konflikts:", error);
+      resolve_error.value = typeof error === 'string' ? error : 'Fehler beim Speichern der ausgewählten Konfiguration.';
+    } finally {
+      is_resolving.value = false;
+    }
+  }
+
   onMounted(async () => {
     try {
       version.value = await getVersion();
@@ -26,6 +91,8 @@
       console.error("Fehler beim Abrufen der Tauri-Version:", error);
       version.value = pkg.version;
     }
+    await checkConflict();
+    await checkRepairReport();
   });
 
   async function openRelease() {
@@ -57,6 +124,7 @@
         </label>
         <div class="px-4">{{ pages_store.current_page.display_name }}</div>
       </nav>
+
       <!-- Page content here -->
       <div class="flex flex-1 min-h-0 overflow-auto">
         <div class="grow p-2">
@@ -108,6 +176,201 @@
       </div>
     </div>
   </div>
+
+  <!-- Startup Configuration Conflict Modal Dialog -->
+  <ConfigDialog
+    :is-open="conflict !== null"
+    type="warning"
+    title="Konfigurationskonflikt erkannt"
+    description="Aufgrund vorheriger Wiederherstellungsmaßnahmen existiert eine abweichende Recovery-Konfiguration. Bitte wähle, welche Konfiguration dauerhaft beibehalten werden soll:"
+    required
+  >
+    <div v-if="conflict" class="grid grid-cols-1 md:grid-cols-2 gap-4 my-3 text-xs font-mono">
+      <div class="p-3 bg-base-200 rounded-box border border-base-300 space-y-1">
+        <div class="font-bold font-sans text-sm pb-1 border-b border-base-300 text-base-content flex items-center justify-between">
+          <span>Originale Konfiguration</span>
+        </div>
+        <div :class="{ 'text-warning font-semibold': conflict.original.mac_address !== conflict.recovery.mac_address }">
+          <span class="text-base-content/60">MAC:</span> {{ conflict.original.mac_address }}
+        </div>
+        <div :class="{ 'text-warning font-semibold': conflict.original.default_delay !== conflict.recovery.default_delay }">
+          <span class="text-base-content/60">Delay:</span> {{ conflict.original.default_delay }} ms
+        </div>
+        <div :class="{ 'text-warning font-semibold': conflict.original.default_action_duration !== conflict.recovery.default_action_duration }">
+          <span class="text-base-content/60">Dauer:</span> {{ conflict.original.default_action_duration }} ms
+        </div>
+        <div class="truncate" :title="conflict.original.python_sdk" :class="{ 'text-warning font-semibold': conflict.original.python_sdk !== conflict.recovery.python_sdk }">
+          <span class="text-base-content/60">SDK:</span> {{ conflict.original.python_sdk || '-' }}
+        </div>
+        <div class="truncate" :title="conflict.original.workdir" :class="{ 'text-warning font-semibold': conflict.original.workdir !== conflict.recovery.workdir }">
+          <span class="text-base-content/60">Workdir:</span> {{ conflict.original.workdir || '-' }}
+        </div>
+        <div class="truncate" :title="conflict.original.venv" :class="{ 'text-warning font-semibold': conflict.original.venv !== conflict.recovery.venv }">
+          <span class="text-base-content/60">venv:</span> {{ conflict.original.venv || '-' }}
+        </div>
+      </div>
+
+      <div class="p-3 bg-base-200 rounded-box border border-base-300 space-y-1">
+        <div class="font-bold font-sans text-sm pb-1 border-b border-base-300 text-base-content flex items-center justify-between">
+          <span>Recovery-Konfiguration</span>
+        </div>
+        <div :class="{ 'text-warning font-semibold': conflict.original.mac_address !== conflict.recovery.mac_address }">
+          <span class="text-base-content/60">MAC:</span> {{ conflict.recovery.mac_address }}
+        </div>
+        <div :class="{ 'text-warning font-semibold': conflict.original.default_delay !== conflict.recovery.default_delay }">
+          <span class="text-base-content/60">Delay:</span> {{ conflict.recovery.default_delay }} ms
+        </div>
+        <div :class="{ 'text-warning font-semibold': conflict.original.default_action_duration !== conflict.recovery.default_action_duration }">
+          <span class="text-base-content/60">Dauer:</span> {{ conflict.recovery.default_action_duration }} ms
+        </div>
+        <div class="truncate" :title="conflict.recovery.python_sdk" :class="{ 'text-warning font-semibold': conflict.original.python_sdk !== conflict.recovery.python_sdk }">
+          <span class="text-base-content/60">SDK:</span> {{ conflict.recovery.python_sdk || '-' }}
+        </div>
+        <div class="truncate" :title="conflict.recovery.workdir" :class="{ 'text-warning font-semibold': conflict.original.workdir !== conflict.recovery.workdir }">
+          <span class="text-base-content/60">Workdir:</span> {{ conflict.recovery.workdir || '-' }}
+        </div>
+        <div class="truncate" :title="conflict.recovery.venv" :class="{ 'text-warning font-semibold': conflict.original.venv !== conflict.recovery.venv }">
+          <span class="text-base-content/60">venv:</span> {{ conflict.recovery.venv || '-' }}
+        </div>
+      </div>
+    </div>
+
+    <div v-if="resolve_error" class="alert alert-error text-xs py-2 my-2">
+      <span>{{ resolve_error }}</span>
+    </div>
+
+    <template #actions>
+      <button
+        type="button"
+        class="btn btn-outline gap-2"
+        :disabled="is_resolving"
+        @click="resolveConflict('original')"
+      >
+        <span v-if="is_resolving" class="loading loading-spinner loading-xs"></span>
+        <CheckIcon v-else class="size-4" />
+        <span>Keep original configuration</span>
+      </button>
+      <button
+        type="button"
+        class="btn btn-primary gap-2"
+        :disabled="is_resolving"
+        @click="resolveConflict('recovery')"
+      >
+        <span v-if="is_resolving" class="loading loading-spinner loading-xs"></span>
+        <CheckIcon v-else class="size-4" />
+        <span>Keep recovery configuration</span>
+      </button>
+    </template>
+  </ConfigDialog>
+
+  <!-- Configuration Repair / Recovery Modal Dialog -->
+  <ConfigDialog
+    :is-open="reportProps.isOpen"
+    :type="reportProps.type"
+    :title="reportProps.title"
+    :description="reportProps.description"
+    @close="dismissRepairReport"
+  >
+    <div v-if="repair_report" class="space-y-3 my-2 text-xs">
+      <!-- Recovery Details Card if present -->
+      <div
+        v-if="repair_report.recovery_event?.details"
+        class="p-3 bg-base-200 rounded-box border border-base-300 space-y-1.5"
+      >
+        <div
+          v-if="repair_report.recovery_event.details.affected_file"
+          class="flex flex-col sm:flex-row sm:justify-between gap-1"
+        >
+          <span class="font-semibold text-base-content/70">Betroffene Datei:</span>
+          <span class="font-mono break-all">{{ repair_report.recovery_event.details.affected_file }}</span>
+        </div>
+        <div
+          v-if="repair_report.recovery_event.details.error_cause"
+          class="flex flex-col sm:flex-row sm:justify-between gap-1"
+        >
+          <span class="font-semibold text-base-content/70">Ursache des Fehlers:</span>
+          <span class="font-mono text-error break-all">{{ repair_report.recovery_event.details.error_cause }}</span>
+        </div>
+        <div
+          v-if="repair_report.recovery_event.details.recovery_action"
+          class="flex flex-col sm:flex-row sm:justify-between gap-1"
+        >
+          <span class="font-semibold text-base-content/70">Recovery-Maßnahme:</span>
+          <span>{{ repair_report.recovery_event.details.recovery_action }}</span>
+        </div>
+        <div
+          v-if="repair_report.recovery_event.details.source"
+          class="flex flex-col sm:flex-row sm:justify-between gap-1"
+        >
+          <span class="font-semibold text-base-content/70">Verwendete Quelle:</span>
+          <span>{{ repair_report.recovery_event.details.source }}</span>
+        </div>
+        <div
+          v-if="repair_report.recovery_event.details.result"
+          class="flex flex-col sm:flex-row sm:justify-between gap-1"
+        >
+          <span class="font-semibold text-base-content/70">Ergebnis:</span>
+          <span>{{ repair_report.recovery_event.details.result }}</span>
+        </div>
+      </div>
+
+      <!-- Unrecoverable error if no details card -->
+      <div
+        v-else-if="repair_report.unrecoverable_error"
+        class="p-3 bg-base-200 rounded-box border border-base-300 space-y-1.5"
+      >
+        <div class="flex flex-col sm:flex-row sm:justify-between gap-1">
+          <span class="font-semibold text-base-content/70">Ursache des Fehlers:</span>
+          <span class="font-mono text-error break-all">{{ repair_report.unrecoverable_error }}</span>
+        </div>
+        <div class="flex flex-col sm:flex-row sm:justify-between gap-1">
+          <span class="font-semibold text-base-content/70">Ergebnis:</span>
+          <span>Standardkonfiguration wurde geladen.</span>
+        </div>
+      </div>
+
+      <!-- Repairs Table if repairs are present -->
+      <div v-if="repair_report.repairs && repair_report.repairs.length > 0" class="w-full">
+        <div class="overflow-x-auto max-h-56 overflow-y-auto rounded bg-base-200 border border-base-300 p-2 text-xs">
+          <table class="table table-xs w-full">
+            <thead>
+              <tr class="text-base-content/70 border-b border-base-300">
+                <th>Feld</th>
+                <th>Ursprünglicher Wert</th>
+                <th>Erwarteter Typ</th>
+                <th>Grund</th>
+                <th>Ergebniswert</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="repair in repair_report.repairs" :key="repair.field" class="border-b border-base-300/50">
+                <td class="font-mono font-semibold">{{ repair.field }}</td>
+                <td class="font-mono">{{ JSON.stringify(repair.original_value) }}</td>
+                <td class="font-mono">{{ repair.expected_type }}</td>
+                <td>{{ repair.reason }}</td>
+                <td class="font-mono">{{ JSON.stringify(repair.resulting_value) }}</td>
+                <td>
+                  <span
+                    v-if="repair.repair_method === 'converted' && repair.success"
+                    class="badge badge-info badge-xs font-semibold"
+                  >
+                    Konvertiert
+                  </span>
+                  <span
+                    v-else
+                    class="badge badge-warning badge-xs font-semibold"
+                  >
+                    Standardwert
+                  </span>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </ConfigDialog>
 </template>
 
 <style scoped>

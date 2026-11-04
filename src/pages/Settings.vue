@@ -13,6 +13,8 @@
     DocumentIcon,
     CheckIcon,
     AdjustmentsHorizontalIcon,
+    ArrowPathIcon,
+    ExclamationTriangleIcon,
   } from "@heroicons/vue/24/outline";
 
   const MAC_REGEX = /^(([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}|([0-9A-Fa-f]{2}-){5}[0-9A-Fa-f]{2})$/;
@@ -31,6 +33,10 @@
 
   const save_success = ref<boolean>(false);
   const is_saving = ref<boolean>(false);
+
+  const resetDialog = useTemplateRef<HTMLDialogElement>('reset-dialog');
+  const is_resetting = ref<boolean>(false);
+  const reset_success = ref<boolean>(false);
 
   const is_mac_address_valid = computed(() => MAC_REGEX.test(mac_address.value));
   const is_default_delay_valid = computed(() => typeof default_delay.value === 'number' && !Number.isNaN(default_delay.value) && default_delay.value >= 0 && default_delay.value <= 2000);
@@ -158,6 +164,46 @@
     }
   }
 
+  function openResetModal() {
+    resetDialog.value?.showModal();
+  }
+
+  function closeResetModal() {
+    if (is_resetting.value) return;
+    resetDialog.value?.close();
+  }
+
+  function handleResetDialogCancel(event: Event) {
+    if (is_resetting.value) {
+      event.preventDefault();
+      return;
+    }
+  }
+
+  async function confirmReset() {
+    is_resetting.value = true;
+    try {
+      const settings = await invoke("reset_settings") as ConfigSchema;
+
+      mac_address.value = settings.mac_address;
+      default_delay.value = settings.default_delay;
+      default_action_duration.value = settings.default_action_duration;
+      python_sdk.value = settings.python_sdk;
+      workdir.value = settings.workdir;
+      venv.value = settings.venv;
+
+      resetDialog.value?.close();
+      reset_success.value = true;
+      setTimeout(() => {
+        reset_success.value = false;
+      }, 3000);
+    } catch (error) {
+      console.error("Fehler beim Zurücksetzen der Einstellungen:", error);
+    } finally {
+      is_resetting.value = false;
+    }
+  }
+
   async function get_settings() {
     try {
       const settings = await invoke("get_settings") as ConfigSchema;
@@ -186,19 +232,64 @@
 
 <template>
   <div class="p-6 max-w-4xl mx-auto space-y-6">
-    <!-- Header Banner -->
-    <div class="card bg-base-100 shadow-xl border border-base-200">
-      <div class="card-body p-6">
-        <div class="flex items-center gap-3">
-          <div class="p-3 bg-primary/10 rounded-2xl text-primary">
-            <AdjustmentsHorizontalIcon class="size-8" />
+    <!-- Header Banner & Top Action Bar -->
+    <div class="card bg-base-100 shadow-xl border border-base-200 sticky top-0 z-20 backdrop-blur bg-base-100/95">
+      <div class="card-body p-4 sm:p-6 space-y-3">
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div class="flex items-center gap-3">
+            <div class="p-3 bg-primary/10 rounded-2xl text-primary shrink-0">
+              <AdjustmentsHorizontalIcon class="size-8" />
+            </div>
+            <div>
+              <h1 class="card-title text-2xl font-bold">Einstellungen</h1>
+              <p class="text-sm text-base-content/70">
+                Konfiguriere Verbindung, Aktions- & Verzögerungszeiten sowie die Python-Umgebung
+              </p>
+            </div>
           </div>
-          <div>
-            <h1 class="card-title text-2xl font-bold">Einstellungen</h1>
-            <p class="text-sm text-base-content/70">
-              Konfiguriere Verbindung, Aktions- & Verzögerungszeiten sowie die Python-Umgebung
-            </p>
+
+          <!-- Top Actions (Speichern & Zurücksetzen) -->
+          <div class="flex flex-wrap items-center gap-2 sm:self-center shrink-0">
+            <!-- Reset Button -->
+            <button
+              type="button"
+              class="btn btn-outline btn-error gap-2"
+              :disabled="is_saving || is_resetting"
+              @click="openResetModal"
+            >
+              <ArrowPathIcon class="size-4" />
+              <span>Zurücksetzen</span>
+            </button>
+
+            <!-- Save Button -->
+            <button
+              type="button"
+              class="btn btn-primary gap-2 shadow-lg shadow-primary/20"
+              :disabled="!enable_save_btn || is_saving || is_resetting"
+              @click="save"
+            >
+              <span v-if="is_saving" class="loading loading-spinner loading-xs"></span>
+              <CheckIcon v-else class="size-4" />
+              <span>{{ is_saving ? 'Speichert...' : 'Speichern' }}</span>
+            </button>
           </div>
+        </div>
+
+        <!-- Success Notifications -->
+        <div
+          v-if="save_success"
+          class="alert alert-success py-2 px-3 text-sm shadow-md flex items-center gap-2"
+        >
+          <CheckIcon class="size-4 shrink-0" />
+          <span>Einstellungen erfolgreich gespeichert!</span>
+        </div>
+
+        <div
+          v-if="reset_success"
+          class="alert alert-info py-2 px-3 text-sm shadow-md flex items-center gap-2"
+        >
+          <ArrowPathIcon class="size-4 shrink-0" />
+          <span>Einstellungen wurden auf die Standardwerte zurückgesetzt!</span>
         </div>
       </div>
     </div>
@@ -227,7 +318,7 @@
             autocomplete="off"
             spellcheck="false"
             title="Bitte eine gültige MAC-Adresse eingeben (z. B. 00:11:22:33:44:55 oder 00-11-22-33-44-55)"
-            :disabled="is_saving"
+            :disabled="is_saving || is_resetting"
             v-model="mac_address"
           />
           <p class="validator-hint hidden text-xs text-error mt-1">
@@ -261,7 +352,7 @@
                 max="200"
                 step="5"
                 class="range range-warning w-full"
-                :disabled="is_saving"
+                :disabled="is_saving || is_resetting"
                 v-model.number="default_action_duration"
               />
               <div class="flex justify-between text-xs text-base-content/60 font-mono">
@@ -290,7 +381,7 @@
                 max="2000"
                 step="100"
                 class="range range-primary w-full"
-                :disabled="is_saving"
+                :disabled="is_saving || is_resetting"
                 v-model.number="default_delay"
               />
               <div class="flex justify-between text-xs text-base-content/60 font-mono">
@@ -329,13 +420,13 @@
                 aria-label="Ubtech Alpha 1S SDK Pfad zur Python-Main-Datei"
                 class="input w-full font-mono text-sm"
                 :placeholder="python_sdk_placeholder"
-                :disabled="is_saving"
+                :disabled="is_saving || is_resetting"
                 v-model="python_sdk"
               />
               <button
                 type="button"
                 class="btn btn-outline gap-2 shrink-0"
-                :disabled="is_saving"
+                :disabled="is_saving || is_resetting"
                 @click="selectPythonSdk"
               >
                 <DocumentIcon class="size-4" />
@@ -360,13 +451,13 @@
                 aria-label="Arbeitsverzeichnis Pfad"
                 class="input w-full font-mono text-sm"
                 :placeholder="workdir_placeholder"
-                :disabled="is_saving"
+                :disabled="is_saving || is_resetting"
                 v-model="workdir"
               />
               <button
                 type="button"
                 class="btn btn-outline gap-2 shrink-0"
-                :disabled="is_saving"
+                :disabled="is_saving || is_resetting"
                 @click="selectWorkdir"
               >
                 <FolderOpenIcon class="size-4" />
@@ -391,13 +482,13 @@
                 aria-label="Virtuelle Umgebung Pfad"
                 class="input w-full font-mono text-sm"
                 :placeholder="venv_placeholder"
-                :disabled="is_saving"
+                :disabled="is_saving || is_resetting"
                 v-model="venv"
               />
               <button
                 type="button"
                 class="btn btn-outline gap-2 shrink-0"
-                :disabled="is_saving"
+                :disabled="is_saving || is_resetting"
                 @click="selectVenv"
               >
                 <FolderOpenIcon class="size-4" />
@@ -412,27 +503,45 @@
       </div>
     </div>
 
-    <!-- Speichern Button & Status -->
-    <div class="flex items-center gap-4">
-      <button
-        type="button"
-        class="btn btn-primary gap-2 shadow-lg shadow-primary/20"
-        :disabled="!enable_save_btn || is_saving"
-        @click="save"
-      >
-        <span v-if="is_saving" class="loading loading-spinner loading-xs"></span>
-        <CheckIcon v-else class="size-5" />
-        <span>{{ is_saving ? 'Speichert...' : 'Einstellungen speichern' }}</span>
-      </button>
-
-      <div
-        v-if="save_success"
-        class="badge badge-success gap-1.5 p-3 text-success-content font-medium transition-all"
-      >
-        <CheckIcon class="size-4" />
-        <span>Erfolgreich gespeichert!</span>
+    <!-- Reset Confirmation Modal -->
+    <dialog
+      ref="reset-dialog"
+      class="modal"
+      @cancel="handleResetDialogCancel"
+    >
+      <div class="modal-box">
+        <h3 class="text-lg font-bold flex items-center gap-2 text-error">
+          <ExclamationTriangleIcon class="size-6" />
+          <span>Einstellungen zurücksetzen?</span>
+        </h3>
+        <p class="py-4 text-base-content/80 text-sm">
+          Möchtest du wirklich alle Einstellungen auf die Standardwerte zurücksetzen?
+        </p>
+        <div class="modal-action flex justify-end gap-2">
+          <button
+            type="button"
+            class="btn btn-ghost"
+            :disabled="is_resetting"
+            @click="closeResetModal"
+          >
+            Nein
+          </button>
+          <button
+            type="button"
+            class="btn btn-error gap-2"
+            :disabled="is_resetting"
+            @click="confirmReset"
+          >
+            <span v-if="is_resetting" class="loading loading-spinner loading-xs"></span>
+            <CheckIcon v-else class="size-4" />
+            <span>Ja</span>
+          </button>
+        </div>
       </div>
-    </div>
+      <form method="dialog" class="modal-backdrop">
+        <button type="submit">Schließen</button>
+      </form>
+    </dialog>
   </div>
 </template>
 
