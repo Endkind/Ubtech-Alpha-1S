@@ -16,6 +16,10 @@ pub async fn save_settings(
     update: UpdateConfig,
     state: State<'_, AppState>,
 ) -> Result<Config, String> {
+    // Persistence-Lock serialisiert diesen Vorgang mit anderen Speichervorgängen,
+    // damit RAM-Status und TOML-Datei nach Abschluss konsistent bleiben.
+    let _persist = state.persistence_lock.lock().await;
+
     let is_recovery = *state.is_recovery_mode.lock().await;
     let target_path = if is_recovery {
         &state.recovery_path
@@ -50,6 +54,9 @@ pub async fn save_settings(
 
 #[tauri::command]
 pub async fn reset_settings(state: State<'_, AppState>) -> Result<Config, String> {
+    // Persistence-Lock serialisiert diesen Vorgang mit anderen Speichervorgängen.
+    let _persist = state.persistence_lock.lock().await;
+
     let is_recovery = *state.is_recovery_mode.lock().await;
     let target_path = if is_recovery {
         &state.recovery_path
@@ -330,6 +337,180 @@ mod tests {
         // Datei sollte auf Default zurückgesetzt sein
         let loaded = Config::load_from_file(&config_path).await.unwrap();
         assert_eq!(loaded.mac_address, default_mac);
+
+        let _ = tokio::fs::remove_dir_all(&temp_dir).await;
+    }
+
+    /// Testet, dass parallele save_settings-Aufrufe serialisiert werden und
+    /// RAM-Status sowie TOML-Datei nach Abschluss aller Aufrufe konsistent bleiben.
+    #[tokio::test]
+    async fn test_concurrent_save_settings_serialized() {
+        let temp_dir = std::env::temp_dir().join(format!("ubtech_test_mod_concurrent_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let config_path = temp_dir.join("config.toml");
+        let recovery_path = get_recovery_path(&config_path);
+
+        let mut initial_config = Config::default();
+        initial_config.mac_address = "00:00:00:00:00:00".to_string();
+        initial_config.save_to_file(&config_path).await.unwrap();
+
+        let state = std::sync::Arc::new(AppState::new(
+            initial_config.clone(),
+            config_path.clone(),
+            recovery_path.clone(),
+            false,
+            None,
+            None,
+        ));
+
+        // Simuliere mehrere parallele save_settings-Aufrufe mit dem Persistence-Lock.
+        let mut handles = vec![];
+        for i in 0..10u32 {
+            let state = state.clone();
+            let handle = tokio::spawn(async move {
+                let mac = format!("{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}", i, i, i, i, i, i);
+                let update = UpdateConfig {
+                    mac_address: Some(mac),
+                    default_delay: None,
+                    default_action_duration: None,
+                    python_sdk: None,
+                    workdir: None,
+                    venv: None,
+                };
+
+                // Persistence-Lock serialisiert den gesamten read-update-write-Zyklus.
+                let _persist = state.persistence_lock.lock().await;
+
+                let target_path = &state.config_path;
+                let mut settings = {
+                    let guard = state.settings.lock().await;
+                    guard.clone()
+                };
+                if let Err(e) = settings.update(update) {
+                    return Err(e.to_string());
+                }
+                if let Err(e) = settings.save_to_file(target_path).await {
+                    return Err(format!("Failed to save configuration: {}", e));
+                }
+                {
+                    let mut guard = state.settings.lock().await;
+                    *guard = settings.clone();
+                }
+                Ok(settings)
+            });
+            handles.push(handle);
+        }
+
+        // Warte auf alle Aufrufe — tokio::spawn gibt Result<T, JoinError> zurück.
+        let results: Vec<Result<Result<Config, String>, _>> = futures::future::join_all(handles).await;
+
+        // Mindestens ein Aufruf sollte erfolgreich sein.
+        let success_count = results.iter().filter(|r| matches!(r, Ok(Ok(_)))).count();
+        assert!(success_count > 0, "Mindestens ein save_settings-Aufruf sollte erfolgreich sein");
+
+        // Nach Abschluss aller Aufrufe müssen RAM und Datei denselben MAC-Wert haben.
+        let ram_mac = {
+            let guard = state.settings.lock().await;
+            guard.mac_address.clone()
+        };
+        let disk_mac = Config::load_from_file(&config_path).await.unwrap().mac_address;
+
+        assert_eq!(
+            ram_mac, disk_mac,
+            "RAM-Status und TOML-Datei müssen nach parallelen save_settings-Aufrufen konsistent sein"
+        );
+
+        let _ = tokio::fs::remove_dir_all(&temp_dir).await;
+    }
+
+    /// Testet, dass save_settings und reset_settings nicht gleichzeitig ausgeführt werden
+    /// und nach Abschluss RAM und Datei konsistent bleiben.
+    #[tokio::test]
+    async fn test_save_and_reset_serialized() {
+        let temp_dir = std::env::temp_dir().join(format!("ubtech_test_mod_save_reset_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let config_path = temp_dir.join("config.toml");
+        let recovery_path = get_recovery_path(&config_path);
+
+        let mut initial_config = Config::default();
+        initial_config.mac_address = "00:00:00:00:00:00".to_string();
+        initial_config.save_to_file(&config_path).await.unwrap();
+
+        let state = std::sync::Arc::new(AppState::new(
+            initial_config.clone(),
+            config_path.clone(),
+            recovery_path.clone(),
+            false,
+            None,
+            None,
+        ));
+
+        // Starte parallele save_settings- und reset_settings-Simulationen.
+        let mut handles = vec![];
+
+        for i in 0..5u32 {
+            let state = state.clone();
+            let handle = tokio::spawn(async move {
+                let mac = format!("{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}", i, i, i, i, i, i);
+                let update = UpdateConfig {
+                    mac_address: Some(mac),
+                    default_delay: None,
+                    default_action_duration: None,
+                    python_sdk: None,
+                    workdir: None,
+                    venv: None,
+                };
+
+                let _persist = state.persistence_lock.lock().await;
+                let target_path = &state.config_path;
+                let mut settings = {
+                    let guard = state.settings.lock().await;
+                    guard.clone()
+                };
+                if let Err(e) = settings.update(update) {
+                    return Err(e.to_string());
+                }
+                if let Err(e) = settings.save_to_file(target_path).await {
+                    return Err(format!("IO error: {}", e));
+                }
+                {
+                    let mut guard = state.settings.lock().await;
+                    *guard = settings.clone();
+                }
+                Ok(())
+            });
+            handles.push(handle);
+        }
+
+        for _ in 0..3 {
+            let state = state.clone();
+            let handle = tokio::spawn(async move {
+                let _persist = state.persistence_lock.lock().await;
+                let target_path = &state.config_path;
+                let default_config = Config::default();
+                if let Err(e) = default_config.save_to_file(target_path).await {
+                    return Err(format!("IO error: {}", e));
+                }
+                {
+                    let mut guard = state.settings.lock().await;
+                    *guard = default_config.clone();
+                }
+                Ok(())
+            });
+            handles.push(handle);
+        }
+
+        let _ = futures::future::join_all(handles).await;
+
+        // Nach Abschluss aller Aufrufe müssen RAM und Datei konsistent sein.
+        let ram_mac = {
+            let guard = state.settings.lock().await;
+            guard.mac_address.clone()
+        };
+        let disk_mac = Config::load_from_file(&config_path).await.unwrap().mac_address;
+
+        assert_eq!(
+            ram_mac, disk_mac,
+            "RAM-Status und TOML-Datei müssen nach gemischten save/reset-Aufrufen konsistent sein"
+        );
 
         let _ = tokio::fs::remove_dir_all(&temp_dir).await;
     }

@@ -18,6 +18,9 @@ pub struct AppState {
     pub is_recovery_mode: Mutex<bool>,
     pub conflict: Mutex<Option<ConfigConflict>>,
     pub repair_report: Mutex<Option<ConfigRepairReport>>,
+    /// Serialisiert alle Persistenzvorgänge (Speichern, Zurücksetzen, Konfliktlösung),
+    /// damit RAM-Status und TOML-Datei nach jedem Vorgang konsistent bleiben.
+    pub persistence_lock: Mutex<()>,
 }
 
 impl AppState {
@@ -36,6 +39,7 @@ impl AppState {
             is_recovery_mode: Mutex::new(is_recovery_mode),
             conflict: Mutex::new(conflict),
             repair_report: Mutex::new(repair_report),
+            persistence_lock: Mutex::new(()),
         }
     }
 
@@ -49,10 +53,13 @@ impl AppState {
             is_recovery_mode: Mutex::new(init_res.is_recovery_mode),
             conflict: Mutex::new(init_res.conflict),
             repair_report: Mutex::new(init_res.repair_report),
+            persistence_lock: Mutex::new(()),
         }
     }
 
     pub async fn resolve_conflict(&self, choice: ResolutionChoice) -> Result<SettingsConfig, String> {
+        // Persistence-Lock serialisiert diesen Vorgang mit save_settings / reset_settings.
+        let _persist = self.persistence_lock.lock().await;
         let mut conflict_guard = self.conflict.lock().await;
         let mut settings_guard = self.settings.lock().await;
         let mut is_recovery_guard = self.is_recovery_mode.lock().await;
@@ -111,6 +118,7 @@ impl Default for AppState {
             is_recovery_mode: Mutex::new(false),
             conflict: Mutex::new(None),
             repair_report: Mutex::new(None),
+            persistence_lock: Mutex::new(()),
         }
     }
 }
