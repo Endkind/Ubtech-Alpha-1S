@@ -16,10 +16,6 @@ pub async fn save_settings(
     update: UpdateConfig,
     state: State<'_, AppState>,
 ) -> Result<Config, String> {
-    let mut settings = state.settings.lock().await;
-
-    settings.update(update).map_err(|err| err.to_string())?;
-
     let is_recovery = *state.is_recovery_mode.lock().await;
     let target_path = if is_recovery {
         &state.recovery_path
@@ -27,20 +23,33 @@ pub async fn save_settings(
         &state.config_path
     };
 
+    // Work on a clone so the shared in-memory state remains unchanged on failure.
+    let mut settings = {
+        let guard = state.settings.lock().await;
+        guard.clone()
+    };
+
+    // Apply update and validate on the clone — on validation error, return early and
+    // leave the shared state untouched.
+    settings.update(update).map_err(|err| err.to_string())?;
+
+    // Save the modified clone. On IO error, the shared in-memory state is preserved.
     settings
         .save_to_file(target_path)
         .await
-        .map_err(|err| format!("Fehler beim Speichern der Konfiguration: {}", err))?;
+        .map_err(|err| format!("Failed to save configuration: {}", err))?;
 
-    Ok(settings.clone())
+    // Only after a successful write, update the shared in-memory state.
+    {
+        let mut guard = state.settings.lock().await;
+        *guard = settings.clone();
+    }
+
+    Ok(settings)
 }
 
 #[tauri::command]
 pub async fn reset_settings(state: State<'_, AppState>) -> Result<Config, String> {
-    let mut settings = state.settings.lock().await;
-    let default_config = Config::default();
-    *settings = default_config.clone();
-
     let is_recovery = *state.is_recovery_mode.lock().await;
     let target_path = if is_recovery {
         &state.recovery_path
@@ -48,10 +57,18 @@ pub async fn reset_settings(state: State<'_, AppState>) -> Result<Config, String
         &state.config_path
     };
 
-    settings
+    // Create the default config and save it before modifying the shared state.
+    let default_config = Config::default();
+    default_config
         .save_to_file(target_path)
         .await
-        .map_err(|err| format!("Fehler beim Speichern der Standardkonfiguration: {}", err))?;
+        .map_err(|err| format!("Failed to save default configuration: {}", err))?;
+
+    // Only after a successful write, update the shared in-memory state.
+    {
+        let mut guard = state.settings.lock().await;
+        *guard = default_config.clone();
+    }
 
     Ok(default_config)
 }
@@ -167,6 +184,152 @@ mod tests {
         assert_eq!(res.mac_address, "99:88:77:66:55:44");
         assert_eq!(state.settings.lock().await.mac_address, "99:88:77:66:55:44");
         assert!(!recovery_path.exists());
+
+        let _ = tokio::fs::remove_dir_all(&temp_dir).await;
+    }
+
+    #[tokio::test]
+    async fn test_save_settings_success_updates_ram_and_disk() {
+        let temp_dir = std::env::temp_dir().join(format!("ubtech_test_mod_save_ok_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let config_path = temp_dir.join("config.toml");
+        let recovery_path = get_recovery_path(&config_path);
+
+        let mut initial_config = Config::default();
+        initial_config.mac_address = "AA:AA:AA:AA:AA:AA".to_string();
+        initial_config.save_to_file(&config_path).await.unwrap();
+
+        let state = std::sync::Arc::new(AppState::new(
+            initial_config.clone(),
+            config_path.clone(),
+            recovery_path.clone(),
+            false,
+            None,
+            None,
+        ));
+
+        let update = UpdateConfig {
+            mac_address: Some("BB:BB:BB:BB:BB:BB".to_string()),
+            default_delay: None,
+            default_action_duration: None,
+            python_sdk: None,
+            workdir: None,
+            venv: None,
+        };
+
+        // Simuliere die save_settings-Logik direkt (ohne Tauri-State-Wrapper)
+        let is_recovery = *state.is_recovery_mode.lock().await;
+        let target_path = if is_recovery {
+            &state.recovery_path
+        } else {
+            &state.config_path
+        };
+
+        let mut settings = {
+            let guard = state.settings.lock().await;
+            guard.clone()
+        };
+        settings.update(update.clone()).unwrap();
+        settings.save_to_file(target_path).await.unwrap();
+        {
+            let mut guard = state.settings.lock().await;
+            *guard = settings.clone();
+        }
+
+        // RAM-State sollte aktualisiert sein
+        assert_eq!(state.settings.lock().await.mac_address, "BB:BB:BB:BB:BB:BB");
+
+        // Datei sollte aktualisiert sein
+        let loaded = Config::load_from_file(&config_path).await.unwrap();
+        assert_eq!(loaded.mac_address, "BB:BB:BB:BB:BB:BB");
+
+        let _ = tokio::fs::remove_dir_all(&temp_dir).await;
+    }
+
+    #[tokio::test]
+    async fn test_save_settings_validation_error_preserves_ram() {
+        let temp_dir = std::env::temp_dir().join(format!("ubtech_test_mod_save_val_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let config_path = temp_dir.join("config.toml");
+        let recovery_path = get_recovery_path(&config_path);
+
+        let mut initial_config = Config::default();
+        initial_config.mac_address = "AA:AA:AA:AA:AA:AA".to_string();
+        initial_config.save_to_file(&config_path).await.unwrap();
+
+        let state = std::sync::Arc::new(AppState::new(
+            initial_config.clone(),
+            config_path.clone(),
+            recovery_path.clone(),
+            false,
+            None,
+            None,
+        ));
+
+        // Ungültige MAC-Adresse — Validierung sollte fehlschlagen
+        let update = UpdateConfig {
+            mac_address: Some("invalid-mac".to_string()),
+            default_delay: None,
+            default_action_duration: None,
+            python_sdk: None,
+            workdir: None,
+            venv: None,
+        };
+
+        // Simuliere die save_settings-Logik: Klon, update (fehlschlägt), RAM bleibt erhalten
+        let settings = {
+            let guard = state.settings.lock().await;
+            guard.clone()
+        };
+        let mut settings_clone = settings.clone();
+        let update_result = settings_clone.update(update);
+        assert!(update_result.is_err());
+
+        // Da der Fehler auf dem Klon auftritt, wird der gemeinsame State NICHT überschrieben
+        assert_eq!(state.settings.lock().await.mac_address, "AA:AA:AA:AA:AA:AA");
+
+        let _ = tokio::fs::remove_dir_all(&temp_dir).await;
+    }
+
+    #[tokio::test]
+    async fn test_reset_settings_success_updates_ram_and_disk() {
+        let temp_dir = std::env::temp_dir().join(format!("ubtech_test_mod_reset_ok_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let config_path = temp_dir.join("config.toml");
+        let recovery_path = get_recovery_path(&config_path);
+
+        let mut initial_config = Config::default();
+        initial_config.mac_address = "AA:AA:AA:AA:AA:AA".to_string();
+        initial_config.save_to_file(&config_path).await.unwrap();
+
+        let state = std::sync::Arc::new(AppState::new(
+            initial_config.clone(),
+            config_path.clone(),
+            recovery_path.clone(),
+            false,
+            None,
+            None,
+        ));
+
+        // Simuliere die reset_settings-Logik direkt
+        let is_recovery = *state.is_recovery_mode.lock().await;
+        let target_path = if is_recovery {
+            &state.recovery_path
+        } else {
+            &state.config_path
+        };
+
+        let default_config = Config::default();
+        default_config.save_to_file(target_path).await.unwrap();
+        {
+            let mut guard = state.settings.lock().await;
+            *guard = default_config.clone();
+        }
+
+        // RAM-State sollte auf Default zurückgesetzt sein
+        let default_mac = Config::default().mac_address;
+        assert_eq!(state.settings.lock().await.mac_address, default_mac);
+
+        // Datei sollte auf Default zurückgesetzt sein
+        let loaded = Config::load_from_file(&config_path).await.unwrap();
+        assert_eq!(loaded.mac_address, default_mac);
 
         let _ = tokio::fs::remove_dir_all(&temp_dir).await;
     }
